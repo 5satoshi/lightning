@@ -1292,6 +1292,9 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 
 	ok &= wallet_shachain_load(w, db_col_u64(stmt, "shachain_remote_id"),
 				   &wshachain);
+	if (!ok) {
+		log_debug(w->log, "wallet_shachain_load failed");
+	}
 
 	remote_shutdown_scriptpubkey = db_col_arr(tmpctx, stmt,
 						  "shutdown_scriptpubkey_remote", u8);
@@ -1332,9 +1335,15 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	db_col_channel_id(stmt, "full_channel_id", &cid);
 	channel_config_id = db_col_u64(stmt, "channel_config_local");
 	ok &= wallet_channel_config_load(w, channel_config_id, &our_config);
+	if (!ok) {
+		log_debug(w->log, "wallet_channel_config_load failed");
+	}
 	db_col_sha256d(stmt, "funding_tx_id", &funding.txid.shad);
 	funding.n = db_col_int(stmt, "funding_tx_outnum"),
 	ok &= db_col_signature(stmt, "last_sig", &last_sig.s);
+	if (!ok) {
+		log_debug(w->log, "db_col_signature for last_sig failed");
+	}
 	last_sig.sighash_type = SIGHASH_ALL;
 
 	/* Populate channel_info */
