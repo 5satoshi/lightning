@@ -1275,7 +1275,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	if (!peer) {
 		peer = wallet_peer_load(w, peer_dbid);
 		if (!peer) {
-			log_debug(w->log, "wallet_peer_load failed (peer_id=%d)",int(peer_dbid));
+			log_debug(w->log, "wallet_peer_load failed (peer_id=%u)",peer_dbid);
 			return NULL;
 		}
 	}
