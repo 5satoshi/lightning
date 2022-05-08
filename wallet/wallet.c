@@ -1271,6 +1271,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 
 	peer_dbid = db_col_u64(stmt, "peer_id");
 	peer = find_peer_by_dbid(w->ld, peer_dbid);
+	log_debug(w->log, "checking for peer");
 	if (!peer) {
 		peer = wallet_peer_load(w, peer_dbid);
 		if (!peer) {
@@ -1279,10 +1280,11 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 		}
 	}
 
+	log_debug(w->log, "checking for channel_id");
 	if (!db_col_is_null(stmt, "short_channel_id")) {
 		scid = tal(tmpctx, struct short_channel_id);
 		if (!db_col_short_channel_id_str(stmt, "short_channel_id", scid))
-			log_debug(w->log, "no shart_channel_id");
+			log_debug(w->log, "no short_channel_id");
 			return NULL;
 	} else {
 		scid = NULL;
@@ -1347,6 +1349,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	wallet_channel_config_load(w, db_col_u64(stmt, "channel_config_remote"),
 				   &channel_info.their_config);
 
+	log_debug(w->log, "checking for fee state");
 	fee_states
 		= wallet_channel_fee_states_load(w,
 						 db_col_u64(stmt, "id"),
@@ -1361,6 +1364,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	}
 
 	/* Blockheight states for the channel! */
+	log_debug(w->log, "checking for channel height state");
 	height_states
 		= wallet_channel_height_states_load(w,
 						    db_col_u64(stmt, "id"),
@@ -1374,6 +1378,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 		return NULL;
 	}
 
+	log_debug(w->log, "checking final key index");
 	final_key_idx = db_col_u64(stmt, "shutdown_keyidx_local");
 	if (final_key_idx < 0) {
 		tal_free(fee_states);
@@ -1431,6 +1436,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	else
 		type = channel_type_none(NULL);
 
+	log_debug(w->log, "set new channel");
 	chan = new_channel(peer, db_col_u64(stmt, "id"),
 			   &wshachain,
 			   db_col_int(stmt, "state"),
