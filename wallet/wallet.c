@@ -1595,6 +1595,7 @@ static bool wallet_channels_load_active(struct wallet *w)
 			ok = false;
 			break;
 		}
+		log_debug(w->log, "Loaded %d channels from DB so far", count);
 		count++;
 	}
 	log_debug(w->log, "Loaded %d channels from DB", count);
