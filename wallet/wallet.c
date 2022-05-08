@@ -1290,11 +1290,9 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 		scid = NULL;
 	}
 
+	log_debug(w->log, "load shachain_remote_id");
 	ok &= wallet_shachain_load(w, db_col_u64(stmt, "shachain_remote_id"),
 				   &wshachain);
-	if (!ok) {
-		log_debug(w->log, "wallet_shachain_load failed");
-	}
 
 	remote_shutdown_scriptpubkey = db_col_arr(tmpctx, stmt,
 						  "shutdown_scriptpubkey_remote", u8);
@@ -1315,6 +1313,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	} else
 		last_sent_commit = NULL;
 
+	log_debug(w->log, "ifdef COMPAT_V060");
 #ifdef COMPAT_V060
 	if (!last_sent_commit && !db_col_is_null(stmt, "last_sent_commit_state")) {
 		last_sent_commit = tal(tmpctx, struct changed_htlc);
