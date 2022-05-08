@@ -1590,12 +1590,12 @@ static bool wallet_channels_load_active(struct wallet *w)
 	db_query_prepared(stmt);
 
 	while (db_step(stmt)) {
+		log_debug(w->log, "Loading channel %d from DB", count+1);
 		struct channel *c = wallet_stmt2channel(w, stmt);
 		if (!c) {
 			ok = false;
 			break;
 		}
-		log_debug(w->log, "Loaded %d channels from DB so far", count);
 		count++;
 	}
 	log_debug(w->log, "Loaded %d channels from DB", count);
