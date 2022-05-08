@@ -825,12 +825,15 @@ static struct peer *wallet_peer_load(struct wallet *w, const u64 dbid)
 	db_bind_u64(stmt, 0, dbid);
 	db_query_prepared(stmt);
 
-	if (!db_step(stmt))
+	if (!db_step(stmt)){
+		log_debug(w->log, "peer_id=%lu bit found in peers",dbid);
 		goto done;
+	}
 
 	if (db_col_is_null(stmt, "node_id")) {
 		db_col_ignore(stmt, "address");
 		db_col_ignore(stmt, "id");
+		log_debug(w->log, "node_id is null for peer_id=%lu",dbid);
 		goto done;
 	}
 
@@ -838,8 +841,10 @@ static struct peer *wallet_peer_load(struct wallet *w, const u64 dbid)
 
 	addrstr = db_col_strdup(tmpctx, stmt, "address");
 	if (!parse_wireaddr_internal(addrstr, &addr, DEFAULT_PORT,
-				     false, false, true, true, NULL))
+				     false, false, true, true, NULL)){
+		log_debug(w->log, "parse_wireaddr_internal failed for peer_id=%lu",dbid);
 		goto done;
+	}
 
 	/* FIXME: save incoming in db! */
 	peer = new_peer(w->ld, db_col_u64(stmt, "id"), &id, &addr, false);
@@ -1271,7 +1276,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 
 	peer_dbid = db_col_u64(stmt, "peer_id");
 	peer = find_peer_by_dbid(w->ld, peer_dbid);
-	log_debug(w->log, "checking for peer");
+	log_debug(w->log, "checking for peer (peer_id=%lu)",peer_dbid);
 	if (!peer) {
 		peer = wallet_peer_load(w, peer_dbid);
 		if (!peer) {
