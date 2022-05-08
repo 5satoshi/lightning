@@ -842,7 +842,7 @@ static struct peer *wallet_peer_load(struct wallet *w, const u64 dbid)
 	addrstr = db_col_strdup(tmpctx, stmt, "address");
 	if (!parse_wireaddr_internal(addrstr, &addr, DEFAULT_PORT,
 				     false, false, true, true, NULL)){
-		log_debug(w->log, "parse_wireaddr_internal failed for peer_id=%lu",dbid);
+		log_debug(w->log, "parse_wireaddr_internal failed for peer_id=%lu and %s",dbid,addrstr);
 		goto done;
 	}
 
