@@ -1355,6 +1355,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	db_col_pubkey(stmt, "per_commit_remote", &channel_info.remote_per_commit);
 	db_col_pubkey(stmt, "old_per_commit_remote", &channel_info.old_remote_per_commit);
 
+	log_debug(w->log, "loading their_config by wallet_channel_config_load");
 	wallet_channel_config_load(w, db_col_u64(stmt, "channel_config_remote"),
 				   &channel_info.their_config);
 
