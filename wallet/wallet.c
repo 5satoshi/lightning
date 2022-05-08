@@ -1494,7 +1494,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 		log_debug(w->log, "wallet_channel_load_inflights failed");
 		return NULL;
 	}
-
+	log_debug(w->log, "leaving wallet_stmt2channel");
 	return chan;
 }
 
