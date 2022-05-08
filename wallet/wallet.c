@@ -1332,21 +1332,19 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	} else
 		future_per_commitment_point = NULL;
 
+	log_debug(w->log, "add our_config by wallet_channel_config_load ");
 	db_col_channel_id(stmt, "full_channel_id", &cid);
 	channel_config_id = db_col_u64(stmt, "channel_config_local");
 	ok &= wallet_channel_config_load(w, channel_config_id, &our_config);
-	if (!ok) {
-		log_debug(w->log, "wallet_channel_config_load failed");
-	}
+
+	log_debug(w->log, "add last_sig ");
 	db_col_sha256d(stmt, "funding_tx_id", &funding.txid.shad);
 	funding.n = db_col_int(stmt, "funding_tx_outnum"),
 	ok &= db_col_signature(stmt, "last_sig", &last_sig.s);
-	if (!ok) {
-		log_debug(w->log, "db_col_signature for last_sig failed");
-	}
 	last_sig.sighash_type = SIGHASH_ALL;
 
 	/* Populate channel_info */
+	log_debug(w->log, "Populate channel_info");
 	db_col_pubkey(stmt, "fundingkey_remote", &channel_info.remote_fundingkey);
 	db_col_pubkey(stmt, "revocation_basepoint_remote", &channel_info.theirbase.revocation);
 	db_col_pubkey(stmt, "payment_basepoint_remote", &channel_info.theirbase.payment);
