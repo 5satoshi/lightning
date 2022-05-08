@@ -1274,6 +1274,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	if (!peer) {
 		peer = wallet_peer_load(w, peer_dbid);
 		if (!peer) {
+			log_debug(w->log, "wallet_peer_load failed");
 			return NULL;
 		}
 	}
@@ -1281,6 +1282,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	if (!db_col_is_null(stmt, "short_channel_id")) {
 		scid = tal(tmpctx, struct short_channel_id);
 		if (!db_col_short_channel_id_str(stmt, "short_channel_id", scid))
+			log_debug(w->log, "no shart_channel_id");
 			return NULL;
 	} else {
 		scid = NULL;
@@ -1354,6 +1356,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 
 	if (!ok) {
 		tal_free(fee_states);
+		log_debug(w->log, "wallet_channel_fee_states_load failed");
 		return NULL;
 	}
 
@@ -1367,12 +1370,14 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 
 	if (!ok) {
 		tal_free(height_states);
+		log_debug(w->log, "wallet_channel_height_states_load failed");
 		return NULL;
 	}
 
 	final_key_idx = db_col_u64(stmt, "shutdown_keyidx_local");
 	if (final_key_idx < 0) {
 		tal_free(fee_states);
+		log_debug(w->log, "final key index is below 0");
 		log_broken(w->log, "%s: Final key < 0", __func__);
 		return NULL;
 	}
@@ -1486,6 +1491,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 
 	if (!wallet_channel_load_inflights(w, chan)) {
 		tal_free(chan);
+		log_debug(w->log, "wallet_channel_load_inflights failed");
 		return NULL;
 	}
 
