@@ -847,7 +847,7 @@ static struct peer *wallet_peer_load(struct wallet *w, const u64 dbid)
 	}
 
 	/* FIXME: save incoming in db! */
-	log_debug(w->log, "successful for wallet_peer_load for peer_id=%lu and %s",dbid,addrstr)
+	log_debug(w->log, "successful for wallet_peer_load for peer_id=%lu and %s",dbid,addrstr);
 	peer = new_peer(w->ld, db_col_u64(stmt, "id"), &id, &addr, false);
 
 done:
