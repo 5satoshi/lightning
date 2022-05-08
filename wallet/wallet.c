@@ -1283,9 +1283,10 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	log_debug(w->log, "checking for channel_id");
 	if (!db_col_is_null(stmt, "short_channel_id")) {
 		scid = tal(tmpctx, struct short_channel_id);
-		if (!db_col_short_channel_id_str(stmt, "short_channel_id", scid))
+		if (!db_col_short_channel_id_str(stmt, "short_channel_id", scid)) {
 			log_debug(w->log, "no short_channel_id");
 			return NULL;
+		}
 	} else {
 		scid = NULL;
 	}
