@@ -584,7 +584,8 @@
         "ListforwardsRequest": {
             "ListForwards.in_channel": 2,
             "ListForwards.out_channel": 3,
-            "ListForwards.status": 1
+            "ListForwards.status": 1,
+            "ListForwards.timelimit": 4
         },
         "ListforwardsResponse": {
             "ListForwards.forwards[]": 1
