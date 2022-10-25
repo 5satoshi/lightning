@@ -2880,11 +2880,12 @@ static void listforwardings_add_forwardings(struct json_stream *response,
 					    struct wallet *wallet,
 					    enum forward_status status,
 					    const struct short_channel_id *chan_in,
-					    const struct short_channel_id *chan_out)
+					    const struct short_channel_id *chan_out,
+					    const timeabs *epoch)
 {
 	const struct forwarding *forwardings;
 
-	forwardings = wallet_forwarded_payments_get(wallet, tmpctx, status, chan_in, chan_out);
+	forwardings = wallet_forwarded_payments_get(wallet, tmpctx, status, chan_in, chan_out, epoch);
 
 	json_array_start(response, "forwards");
 	for (size_t i=0; i<tal_count(forwardings); i++) {
@@ -2920,6 +2921,7 @@ static struct command_result *json_listforwards(struct command *cmd,
 
 	struct json_stream *response;
 	struct short_channel_id *chan_in, *chan_out;
+	unsigned int *epoch;
 	enum forward_status *status;
 
 	if (!param(cmd, buffer, params,
@@ -2927,11 +2929,12 @@ static struct command_result *json_listforwards(struct command *cmd,
 			     FORWARD_ANY),
 		   p_opt("in_channel", param_short_channel_id, &chan_in),
 		   p_opt("out_channel", param_short_channel_id, &chan_out),
+		   p_opt("epoch", param_number, &epoch),
 		   NULL))
 		return command_param_failed();
 
 	response = json_stream_success(cmd);
-	listforwardings_add_forwardings(response, cmd->ld->wallet, *status, chan_in, chan_out);
+	listforwardings_add_forwardings(response, cmd->ld->wallet, *status, chan_in, chan_out, epoch);
 
 	return command_success(cmd, response);
 }
