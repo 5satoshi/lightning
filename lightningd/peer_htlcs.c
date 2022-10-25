@@ -2885,7 +2885,7 @@ static struct command_result *json_listforwards(struct command *cmd,
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS, "Unrecognized status: %s", status_str);
 
 	response = json_stream_success(cmd);
-	listforwardings_add_forwardings(response, cmd->ld->wallet, status, chan_in, chan_out,timestamp_str);
+	listforwardings_add_forwardings(response, cmd->ld->wallet, status, chan_in, chan_out, timestamp_str);
 
 	return command_success(cmd, response);
 }

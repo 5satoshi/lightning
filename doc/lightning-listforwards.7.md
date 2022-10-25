@@ -4,7 +4,7 @@ lightning-listforwards -- Command showing all htlcs and their information
 SYNOPSIS
 --------
 
-**listforwards** [*status*] [*in_channel*] [*out_channel*]
+**listforwards** [*status*] [*in_channel*] [*out_channel*] [*timelimit*]
 
 DESCRIPTION
 -----------
@@ -17,6 +17,9 @@ If *status* is specified, then only the forwards with the given status are retur
 
 If *in_channel* or *out_channel* is specified, then only the matching forwards
 on the given in/out channel are returned.
+
+If *timlimit* is specified, only the matching forwards after
+given timestamp in nanosecond epoch are returned.
 
 RETURN VALUE
 ------------
