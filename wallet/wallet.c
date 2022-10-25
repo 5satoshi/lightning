@@ -4508,7 +4508,7 @@ const struct forwarding *wallet_forwarded_payments_get(struct wallet *w,
 						       enum forward_status status,
 						       const struct short_channel_id *chan_in,
 						       const struct short_channel_id *chan_out,
-						       const u64 *timestamp)
+						       const struct u64 *timestamp)
 {
 	struct forwarding *results = tal_arr(ctx, struct forwarding, 0);
 	size_t count = 0;

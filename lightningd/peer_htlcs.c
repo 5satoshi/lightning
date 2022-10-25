@@ -2851,7 +2851,7 @@ static struct command_result *json_listforwards(struct command *cmd,
 	struct short_channel_id *chan_in;
 	struct short_channel_id *chan_out;
 
-	u64 *timestamp;
+	struct u64 *timestamp;
 
 	const char *status_str;
 	enum forward_status status = FORWARD_ANY;
