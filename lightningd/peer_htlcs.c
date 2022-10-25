@@ -2877,7 +2877,7 @@ static struct command_result *json_listforwards(struct command *cmd,
 		   p_opt("status", param_string, &status_str),
 		   p_opt("in_channel", param_short_channel_id, &chan_in),
 		   p_opt("out_channel", param_short_channel_id, &chan_out),
-		   p_opt("timelimit", param_number, &timestamp),
+		   p_opt("timelimit", param_u64, &timestamp),
 		   NULL))
 		return command_param_failed();
  parsed:
