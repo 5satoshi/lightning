@@ -10,8 +10,8 @@
 #include <ccan/tal/str/str.h>
 #include <common/bolt12_merkle.h>
 #include <common/gossmap.h>
+#include <common/json_param.h>
 #include <common/json_stream.h>
-#include <common/json_tok.h>
 #include <common/memleak.h>
 #include <common/pseudorand.h>
 #include <common/type_to_string.h>
@@ -290,6 +290,10 @@ struct pay_mpp {
 	/* Timestamp of the first part */
 	u32 timestamp;
 
+	/* Completion timestamp. The lowest `completed_at` value for a
+	 * successful part. */
+	u64 success_at;
+
 	/* The destination of the payment, if specified. */
 	const jsmntok_t *destination;
 
@@ -391,6 +395,9 @@ static void add_new_entry(struct json_stream *ret,
 
 	json_add_u32(ret, "created_at", pm->timestamp);
 
+	if (pm->success_at < UINT64_MAX)
+		json_add_u64(ret, "completed_at", pm->success_at);
+
 	if (pm->label)
 		json_add_tok(ret, "label", pm->label, buf);
 	if (pm->preimage)
@@ -399,11 +406,10 @@ static void add_new_entry(struct json_stream *ret,
 	/* This is only tallied for pending and successful payments, not
 	 * failures. */
 	if (pm->amount != NULL && pm->num_nonfailed_parts > 0)
-		json_add_string(ret, "amount_msat",
-				fmt_amount_msat(tmpctx, *pm->amount));
+		json_add_amount_msat_only(ret, "amount_msat", *pm->amount);
 
-	json_add_string(ret, "amount_sent_msat",
-			fmt_amount_msat(tmpctx, pm->amount_sent));
+	json_add_amount_msat_only(ret, "amount_sent_msat",
+				  pm->amount_sent);
 
 	if (pm->num_nonfailed_parts > 1)
 		json_add_u64(ret, "number_of_parts",
@@ -431,10 +437,12 @@ static struct command_result *listsendpays_done(struct command *cmd,
 				    "Unexpected non-array result from listsendpays");
 
 	json_for_each_arr(i, t, arr) {
-		const jsmntok_t *status, *invstrtok, *hashtok, *createdtok, *grouptok;
+		const jsmntok_t *status, *invstrtok, *hashtok, *createdtok,
+		    *completedtok, *grouptok;
 		const char *invstr = invstring;
 		struct sha256 payment_hash;
 		u32 created_at;
+		u64 completed_at;
 		u64 groupid;
 		struct pay_sort_key key;
 
@@ -443,8 +451,14 @@ static struct command_result *listsendpays_done(struct command *cmd,
 			invstrtok = json_get_member(buf, t, "bolt12");
 		hashtok = json_get_member(buf, t, "payment_hash");
 		createdtok = json_get_member(buf, t, "created_at");
+		completedtok = json_get_member(buf, t, "completed_at");
 		assert(hashtok != NULL);
 		assert(createdtok != NULL);
+
+		if (completedtok != NULL)
+			json_to_u64(buf, completedtok, &completed_at);
+		else
+			completed_at = UINT64_MAX;
 
 		grouptok = json_get_member(buf, t, "groupid");
 		if (grouptok != NULL)
@@ -476,6 +490,7 @@ static struct command_result *listsendpays_done(struct command *cmd,
 			pm->timestamp = created_at;
 			pm->sortkey.payment_hash = pm->payment_hash;
 			pm->sortkey.groupid = groupid;
+			pm->success_at = UINT64_MAX;
 			pay_map_add(&pay_map, pm);
 			// First time we see the groupid we add it to the order
 			// array, so we can retrieve them in the correct order.
@@ -496,6 +511,11 @@ static struct command_result *listsendpays_done(struct command *cmd,
 			pm->preimage
 				= json_get_member(buf, t, "payment_preimage");
 			pm->state |= PAYMENT_COMPLETE;
+
+			/* We count down from UINT64_MAX. */
+			if (pm->success_at > completed_at)
+				pm->success_at = completed_at;
+
 		} else if (json_tok_streq(buf, status, "pending")) {
 			add_amount_sent(cmd->plugin, pm->invstring, pm, buf, t);
 			pm->num_nonfailed_parts++;
@@ -507,7 +527,7 @@ static struct command_result *listsendpays_done(struct command *cmd,
 
 	ret = jsonrpc_stream_success(cmd);
 	json_array_start(ret, "pays");
-	for (size_t i = 0; i < tal_count(order); i++) {
+	for (i = 0; i < tal_count(order); i++) {
 		pm = pay_map_get(&pay_map, &order[i]);
 		assert(pm != NULL);
 		add_new_entry(ret, buf, pm);
@@ -551,7 +571,7 @@ static struct command_result *json_listpays(struct command *cmd,
 #if DEVELOPER
 static void memleak_mark_payments(struct plugin *p, struct htable *memtable)
 {
-	memleak_remove_region(memtable, &payments, sizeof(payments));
+	memleak_scan_list_head(memtable, &payments);
 }
 #endif
 
@@ -575,9 +595,10 @@ static const char *init(struct plugin *p,
 
 static void on_payment_success(struct payment *payment)
 {
-	struct payment *p;
+	struct payment *p, *nxt;
 	struct payment_tree_result result = payment_collect_result(payment);
 	struct json_stream *ret;
+	struct command *cmd;
 	assert(result.treestates & PAYMENT_STEP_SUCCESS);
 	assert(result.leafstates & PAYMENT_STEP_SUCCESS);
 	assert(result.preimage != NULL);
@@ -585,17 +606,25 @@ static void on_payment_success(struct payment *payment)
 	/* Iterate through any pending payments we suspended and
 	 * terminate them. */
 
-	list_for_each(&payments, p, list) {
+	list_for_each_safe(&payments, p, nxt, list) {
 		/* The result for the active payment is returned in
 		 * `payment_finished`. */
 		if (payment == p)
 			continue;
-		if (!sha256_eq(payment->payment_hash, p->payment_hash))
+
+		/* Both groupid and payment_hash must match. This is
+		 * because when we suspended the payment itself, we
+		 * set the groupid to match. */
+		if (!sha256_eq(payment->payment_hash, p->payment_hash) ||
+		    payment->groupid != p->groupid)
 			continue;
 		if (p->cmd == NULL)
 			continue;
 
-		ret = jsonrpc_stream_success(p->cmd);
+		cmd = p->cmd;
+		p->cmd = NULL;
+
+		ret = jsonrpc_stream_success(cmd);
 		json_add_node_id(ret, "destination", p->destination);
 		json_add_sha256(ret, "payment_hash", p->payment_hash);
 		json_add_timeabs(ret, "created_at", p->start_time);
@@ -615,8 +644,7 @@ static void on_payment_success(struct payment *payment)
 		json_add_preimage(ret, "payment_preimage", result.preimage);
 
 		json_add_string(ret, "status", "complete");
-		if (command_finished(p->cmd, ret)) {/* Ignore result. */}
-		p->cmd = NULL;
+		if (command_finished(cmd, ret)) {/* Ignore result. */}
 	}
 }
 
@@ -642,7 +670,9 @@ static void payment_add_attempt(struct json_stream *s, const char *fieldname, st
 		json_add_string(s, "failreason", p->failreason);
 
 	json_add_u64(s, "partid", p->partid);
-	json_add_amount_msat_only(s, "amount", p->amount);
+	if (deprecated_apis)
+		json_add_amount_msat_only(s, "amount", p->amount);
+	json_add_amount_msat_only(s, "amount_msat", p->amount);
 	if (p->parent != NULL)
 		json_add_u64(s, "parent_partid", p->parent->partid);
 
@@ -663,9 +693,9 @@ static void payment_json_add_attempts(struct json_stream *s,
 
 static void on_payment_failure(struct payment *payment)
 {
-	struct payment *p;
+	struct payment *p, *nxt;
 	struct payment_tree_result result = payment_collect_result(payment);
-	list_for_each(&payments, p, list)
+	list_for_each_safe(&payments, p, nxt, list)
 	{
 		struct json_stream *ret;
 		struct command *cmd;
@@ -674,13 +704,17 @@ static void on_payment_failure(struct payment *payment)
 		 * `payment_finished`. */
 		if (payment == p)
 			continue;
-		if (!sha256_eq(payment->payment_hash, p->payment_hash))
+
+		/* When we suspended we've set the groupid to match so
+		 * we'd know which calls were duplicates. */
+		if (!sha256_eq(payment->payment_hash, p->payment_hash) ||
+		    payment->groupid != p->groupid)
 			continue;
 		if (p->cmd == NULL)
 			continue;
 
 		cmd = p->cmd;
-
+		p->cmd = NULL;
 		if (p->aborterror != NULL) {
 			/* We set an explicit toplevel error message,
 			 * so let's report that. */
@@ -767,7 +801,6 @@ static void on_payment_failure(struct payment *payment)
 
 			if (command_finished(cmd, ret)) { /* Ignore result. */}
 		}
-		p->cmd = NULL;
 	}
 }
 
@@ -786,6 +819,10 @@ payment_listsendpays_previous(struct command *cmd, const char *buf,
 	u64 last_group = 0;
 	/* Do we have pending sendpays for the previous attempt? */
 	bool pending = false;
+
+	/* Group ID of the first pending payment, this will be the one
+	 * who's result gets replayed if we end up suspending. */
+	u64 pending_group_id = 0;
 	/* Did a prior attempt succeed? */
 	bool completed = false;
 
@@ -854,6 +891,11 @@ payment_listsendpays_previous(struct command *cmd, const char *buf,
 		status = json_get_member(buf, t, "status");
 		completed |= json_tok_streq(buf, status, "complete");
 		pending |= json_tok_streq(buf, status, "pending");
+
+		/* Remember the group id of the first pending group so
+		 * we can replay its result later. */
+		if (!pending_group_id && pending)
+			pending_group_id = groupid;
 	}
 
 	if (completed) {
@@ -873,7 +915,9 @@ payment_listsendpays_previous(struct command *cmd, const char *buf,
 		/* We suspend this call and wait for the
 		 * `on_payment_success` or `on_payment_failure`
 		 * handler of the currently running payment to notify
-		 * us about its completion. */
+		 * us about its completion. We latch on to the result
+		 * from the call we extracted above. */
+		p->groupid = pending_group_id;
 		return command_still_pending(cmd);
 	}
 	p->groupid = last_group + 1;
@@ -957,7 +1001,7 @@ static struct command_result *json_pay(struct command *cmd,
 	if (!param(cmd, buf, params,
 		   /* FIXME: parameter should be invstring now */
 		   p_req("bolt11", param_string, &b11str),
-		   p_opt("msatoshi", param_msat, &msat),
+		   p_opt("amount_msat|msatoshi", param_msat, &msat),
 		   p_opt("label", param_string, &label),
 		   p_opt_def("riskfactor", param_millionths,
 			     &riskfactor_millionths, 10000000),
@@ -1158,10 +1202,6 @@ static struct command_result *json_pay(struct command *cmd,
 		}
 		payment_mod_exemptfee_get_data(p)->amount
 			= exemptfee ? *exemptfee : AMOUNT_MSAT(5000);
-
-		/* We free unneeded params now to keep memleak happy. */
-		tal_free(maxfee_pct_millionths);
-		tal_free(exemptfee);
 	}
 
 	shadow_route = payment_mod_shadowroute_get_data(p);

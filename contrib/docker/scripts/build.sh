@@ -2,7 +2,7 @@
 
 echo "Running in $(pwd)"
 export ARCH=${ARCH:-64}
-export BOLTDIR=lightning-rfc
+export BOLTDIR=bolts
 export CC=${COMPILER:-gcc}
 export COMPAT=${COMPAT:-1}
 export TEST_CHECK_DBSTMTS=${TEST_CHECK_DBSTMTS:-0}
@@ -23,10 +23,10 @@ export LIGHTNINGD_POSTGRES_NO_VACUUM=1
 
 pip3 install --upgrade pip
 pip3 install --user poetry
-poetry config virtualenvs.create false --local
-poetry install
+poetry export --dev --without-hashes -o requirements.txt
+pip3 install -r requirements.txt
 
-git clone https://github.com/lightningnetwork/lightning-rfc.git ../lightning-rfc
+git clone https://github.com/lightning/bolts.git ../bolts
 git submodule update --init --recursive
 
 ./configure CC="$CC"
@@ -34,7 +34,7 @@ cat config.vars
 
 cat << EOF > pytest.ini
 [pytest]
-addopts=-p no:logging --color=yes --timeout=1800 --timeout-method=thread --test-group-random-seed=42 --force-flaky --no-success-flaky-report --max-runs=3
+addopts=-p no:logging --color=yes --timeout=1800 --timeout-method=thread --test-group-random-seed=42
 markers =
     slow_test: marks tests as slow (deselect with '-m "not slow_test"')
 EOF

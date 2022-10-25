@@ -5,9 +5,8 @@
 #include <common/bolt12_merkle.h>
 #include <common/configdir.h>
 #include <common/json_command.h>
-#include <common/json_helpers.h>
-#include <common/json_tok.h>
-#include <common/param.h>
+#include <common/json_param.h>
+#include <common/json_stream.h>
 #include <common/type_to_string.h>
 #include <errno.h>
 #include <hsmd/hsmd_wiregen.h>
@@ -286,7 +285,7 @@ static struct command_result *prev_payment(struct command *cmd,
 	bool prev_paid = false;
 
 	assert(!invreq->payer_info);
-	payments = wallet_payment_list(cmd, cmd->ld->wallet, NULL, NULL);
+	payments = wallet_payment_list(cmd, cmd->ld->wallet, NULL);
 
 	for (size_t i = 0; i < tal_count(payments); i++) {
 		const struct tlv_invoice *inv;
@@ -381,9 +380,12 @@ static struct command_result *param_b12_invreq(struct command *cmd,
 				    cmd->ld->our_features, chainparams, &fail);
 	if (!*invreq)
 		return command_fail_badparam(cmd, name, buffer, tok, fail);
+#if !DEVELOPER
+	/* We use this for testing with known payer_info */
 	if ((*invreq)->payer_info)
 		return command_fail_badparam(cmd, name, buffer, tok,
 					     "must not have payer_info");
+#endif
 	if ((*invreq)->payer_key)
 		return command_fail_badparam(cmd, name, buffer, tok,
 					     "must not have payer_key");
@@ -474,14 +476,9 @@ static struct command_result *json_createinvoicerequest(struct command *cmd,
 	invreq->fields = tlv_make_fields(invreq, tlv_invoice_request);
 	merkle_tlv(invreq->fields, &merkle);
 	invreq->signature = tal(invreq, struct bip340sig);
-	if (deprecated_apis)
-		hsm_sign_b12(cmd->ld, "invoice_request", "payer_signature",
-			     &merkle, invreq->payer_info, invreq->payer_key,
-			     invreq->signature);
-	else
-		hsm_sign_b12(cmd->ld, "invoice_request", "signature",
-			     &merkle, invreq->payer_info, invreq->payer_key,
-			     invreq->signature);
+	hsm_sign_b12(cmd->ld, "invoice_request", "signature",
+		     &merkle, invreq->payer_info, invreq->payer_key,
+		     invreq->signature);
 
 	response = json_stream_success(cmd);
 	json_add_string(response, "bolt12", invrequest_encode(tmpctx, invreq));

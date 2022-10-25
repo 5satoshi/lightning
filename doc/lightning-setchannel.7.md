@@ -38,17 +38,20 @@ and 1,000,000 satoshi is being routed through the channel, an
 proportional fee of 1,000 satoshi is added, resulting in a 0.1% fee.
 
 *htlcmin* is an optional value that limits how small an HTLC we will
-send: if omitted, it is unchanged (the default is no lower limit). It
+forward: if omitted, it is unchanged (the default is no lower limit). It
 can be a whole number, or a whole number ending in *msat* or *sat*, or
 a number with three decimal places ending in *sat*, or a number with 1
-to 11 decimal places ending in *btc*.  The peer also enforces a
-minimum for the channel: setting it below will be ignored.
+to 11 decimal places ending in *btc*.  Note that the peer also enforces a
+minimum for the channel: setting it below that will simply set it to
+that value with a warning.  Also note that *htlcmin* only applies to forwarded
+HTLCs: we can still send smaller payments ourselves.
 
 *htlcmax* is an optional value that limits how large an HTLC we will
-send: if omitted, it is unchanged (the default is no effective
+forward: if omitted, it is unchanged (the default is no effective
 limit). It can be a whole number, or a whole number ending in *msat*
 or *sat*, or a number with three decimal places ending in *sat*, or a
-number with 1 to 11 decimal places ending in *btc*.
+number with 1 to 11 decimal places ending in *btc*.  Note that *htlcmax*
+only applies to forwarded HTLCs: we can still send larger payments ourselves.
 
 *enforcedelay* is the number of seconds to delay before enforcing the
 new fees/htlc max (default 600, which is ten minutes).  This gives the
@@ -64,16 +67,17 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object containing **channels** is returned.  It is an array of objects, where each object contains:
-- **peer_id** (pubkey): The node_id of the peer
-- **channel_id** (hex): The channel_id of the channel (always 64 characters)
-- **fee_base_msat** (msat): The resulting feebase (this is the BOLT #7 name)
-- **fee_proportional_millionths** (u32): The resulting feeppm (this is the BOLT #7 name)
-- **minimum_htlc_out_msat** (msat): The resulting htlcmin we will advertize (the BOLT #7 name is htlc_minimum_msat)
-- **maximum_htlc_out_msat** (msat): The resulting htlcmax we will advertize (the BOLT #7 name is htlc_maximum_msat)
-- **short_channel_id** (short_channel_id, optional): the short_channel_id (if locked in)
+
+- **peer\_id** (pubkey): The node_id of the peer
+- **channel\_id** (hex): The channel_id of the channel (always 64 characters)
+- **fee\_base\_msat** (msat): The resulting feebase (this is the BOLT #7 name)
+- **fee\_proportional\_millionths** (u32): The resulting feeppm (this is the BOLT #7 name)
+- **minimum\_htlc\_out\_msat** (msat): The resulting htlcmin we will advertize (the BOLT #7 name is htlc_minimum_msat)
+- **maximum\_htlc\_out\_msat** (msat): The resulting htlcmax we will advertize (the BOLT #7 name is htlc_maximum_msat)
+- **short\_channel\_id** (short\_channel\_id, optional): the short_channel_id (if locked in)
 - the following warnings are possible:
-  - **warning_htlcmin_too_low**: The requested htlcmin was too low for this peer, so we set it to the minimum they will allow
-  - **warning_htlcmax_too_high**: The requested htlcmax was greater than the channel capacity, so we set it to the channel capacity
+  - **warning\_htlcmin\_too\_low**: The requested htlcmin was too low for this peer, so we set it to the minimum they will allow
+  - **warning\_htlcmax\_too\_high**: The requested htlcmax was greater than the channel capacity, so we set it to the channel capacity
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
 
@@ -103,4 +107,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:a38b5ea12566d9e40eab07b95a90007bf66373ac1189f458d1678634522575b3)
+[comment]: # ( SHA256STAMP:0f7cd751f329360a8cd957dfc8ea0b7d579aa05f4de4f8577039e50266a04f30)

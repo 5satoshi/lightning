@@ -31,7 +31,6 @@ static void destroy_uncommitted_channel(struct uncommitted_channel *uc)
 
 	uc->peer->uncommitted_channel = NULL;
 
-	maybe_disconnect_peer(uc->peer->ld, uc->peer);
 	maybe_delete_peer(uc->peer);
 }
 
@@ -53,6 +52,23 @@ new_uncommitted_channel(struct peer *peer)
 
 	uc->fc = NULL;
 	uc->our_config.id = 0;
+	/* BOLT #2:
+	 *
+	 * The sender:
+	 *   - if `channel_type` includes `option_zeroconf`:
+	 *      - MUST set `minimum_depth` to zero.
+	 *   - otherwise:
+	 *     - SHOULD set `minimum_depth` to a number of blocks it
+	 *       considers reasonable to avoid double-spending of the
+	 *       funding transaction.
+	 */
+	 /* We override this in openchannel hook if we want zeroconf */
+	uc->minimum_depth = ld->config.anchor_confirms;
+
+	/* Use default 1% reserve if not otherwise specified. If this
+	 * is not-NULL it will be used by openingd as absolute value
+	 * (clamped to dust limit). */
+	uc->reserve = NULL;
 
 	memset(&uc->cid, 0xFF, sizeof(uc->cid));
 

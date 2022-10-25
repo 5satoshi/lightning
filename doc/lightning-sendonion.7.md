@@ -42,6 +42,10 @@ to add an HTLC for 1002 millisatoshis and a delay of 21 blocks on top of the cur
 }
 ```
 
+If the first element of *route* does not have "channel" set, a
+suitable channel (if any) will be chosen, otherwise that specific
+short-channel-id is used.
+
 The *payment_hash* parameter specifies the 32 byte hex-encoded hash to use as
 a challenge to the HTLC that we are sending. It is specific to the onion and
 has to match the one the onion was created with.
@@ -88,12 +92,13 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **id** (u64): unique ID for this payment attempt
-- **payment_hash** (hash): the hash of the *payment_preimage* which will prove payment (always 64 characters)
+- **payment\_hash** (hash): the hash of the *payment_preimage* which will prove payment (always 64 characters)
 - **status** (string): status of the payment (could be complete if already sent previously) (one of "pending", "complete")
-- **created_at** (u64): the UNIX timestamp showing when this payment was initiated
-- **amount_sent_msat** (msat): The amount sent
-- **amount_msat** (msat, optional): The amount delivered to destination (if known)
+- **created\_at** (u64): the UNIX timestamp showing when this payment was initiated
+- **amount\_sent\_msat** (msat): The amount sent
+- **amount\_msat** (msat, optional): The amount delivered to destination (if known)
 - **destination** (pubkey, optional): the final destination of the payment if known
 - **label** (string, optional): the label, if given to sendpay
 - **bolt11** (string, optional): the bolt11 string (if supplied)
@@ -101,9 +106,11 @@ On success, an object is returned, containing:
 - **partid** (u64, optional): the partid (if supplied) to sendonion/sendpay
 
 If **status** is "complete":
-  - **payment_preimage** (secret): the proof of payment: SHA256 of this **payment_hash** (always 64 characters)
+
+  - **payment\_preimage** (secret): the proof of payment: SHA256 of this **payment_hash** (always 64 characters)
 
 If **status** is "pending":
+
   - **message** (string, optional): Monitor status with listpays or waitsendpay
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
@@ -127,5 +134,5 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[bolt04]: https://github.com/lightningnetwork/lightning-rfc/blob/master/04-onion-routing.md
-[comment]: # ( SHA256STAMP:d2f4991d271147dd8c13859376f36f2d8843a96034e818a434555a09bf6fd003)
+[bolt04]: https://github.com/lightning/bolts/blob/master/04-onion-routing.md
+[comment]: # ( SHA256STAMP:84283d16d289b6f72ffac0fdca6791bb49ac9ec1ef2bbb06028c18453bb15f02)

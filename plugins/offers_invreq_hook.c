@@ -17,7 +17,6 @@
 struct invreq {
 	struct tlv_invoice_request *invreq;
 	struct tlv_onionmsg_payload_reply_path *reply_path;
-	struct tlv_obs2_onionmsg_payload_reply_path *obs2_reply_path;
 
 	/* The offer, once we've looked it up. */
 	struct tlv_offer *offer;
@@ -36,8 +35,8 @@ fail_invreq_level(struct command *cmd,
 		  const char *fmt, va_list ap)
 {
 	char *full_fmt, *msg;
+	struct tlv_onionmsg_payload *payload;
 	struct tlv_invoice_error *err;
-	u8 *errdata;
 
 	full_fmt = tal_fmt(tmpctx, "Failed invoice_request");
 	if (invreq->invreq) {
@@ -62,10 +61,10 @@ fail_invreq_level(struct command *cmd,
 	err->error = tal_dup_arr(err, char, msg, strlen(msg), 0);
 	/* FIXME: Add suggested_value / erroneous_field! */
 
-	errdata = tal_arr(cmd, u8, 0);
-	towire_tlv_invoice_error(&errdata, err);
-	return send_onion_reply(cmd, invreq->reply_path, invreq->obs2_reply_path,
-				"invoice_error", errdata);
+	payload = tlv_onionmsg_payload_new(tmpctx);
+	payload->invoice_error = tal_arr(payload, u8, 0);
+	towire_tlv_invoice_error(&payload->invoice_error, err);
+	return send_onion_reply(cmd, invreq->reply_path, payload);
 }
 
 static struct command_result *WARN_UNUSED_RESULT PRINTF_FMT(3,4)
@@ -172,6 +171,7 @@ static struct command_result *createinvoice_done(struct command *cmd,
 {
 	char *hrp;
 	u8 *rawinv;
+	struct tlv_onionmsg_payload *payload;
 	const jsmntok_t *t;
 
 	/* We have a signed invoice, use it as a reply. */
@@ -184,8 +184,9 @@ static struct command_result *createinvoice_done(struct command *cmd,
 					json_tok_full(buf, t));
 	}
 
-	return send_onion_reply(cmd, ir->reply_path, ir->obs2_reply_path,
-				"invoice", rawinv);
+	payload = tlv_onionmsg_payload_new(tmpctx);
+	payload->invoice = rawinv;
+	return send_onion_reply(cmd, ir->reply_path, payload);
 }
 
 static struct command_result *createinvoice_error(struct command *cmd,
@@ -431,23 +432,11 @@ static bool check_payer_sig(struct command *cmd,
 	merkle_tlv(invreq->fields, &merkle);
 	sighash_from_merkle("invoice_request", "signature", &merkle, &sighash);
 
-	if (secp256k1_schnorrsig_verify(secp256k1_ctx,
-					sig->u8,
-					sighash.u.u8, sizeof(sighash.u.u8), &payer_key->pubkey) == 1)
-		return true;
-
-	if (!deprecated_apis)
-		return false;
-
-	/* Try old name */
-	plugin_log(cmd->plugin, LOG_DBG,
-		   "Testing invoice_request with old name 'payer_signature'");
-	sighash_from_merkle("invoice_request", "payer_signature",
-			    &merkle, &sighash);
-
 	return secp256k1_schnorrsig_verify(secp256k1_ctx,
 					   sig->u8,
-					   sighash.u.u8, sizeof(sighash.u.u8), &payer_key->pubkey) == 1;
+					   sighash.u.u8,
+					   sizeof(sighash.u.u8),
+					   &payer_key->pubkey) == 1;
 }
 
 static struct command_result *invreq_amount_by_quantity(struct command *cmd,
@@ -634,7 +623,7 @@ static struct command_result *convert_currency(struct command *cmd,
 	json_add_stringn(req->js, "currency",
 			 (const char *)ir->offer->currency,
 			 tal_bytelen(ir->offer->currency));
-	json_add_member(req->js, "amount", false, "%f", double_amount);
+	json_add_primitive_fmt(req->js, "amount", "%f", double_amount);
 	return send_outreq(cmd->plugin, req);
 }
 
@@ -847,15 +836,13 @@ static struct command_result *handle_offerless_request(struct command *cmd,
 
 struct command_result *handle_invoice_request(struct command *cmd,
 					      const u8 *invreqbin,
-					      struct tlv_onionmsg_payload_reply_path *reply_path,
-					      struct tlv_obs2_onionmsg_payload_reply_path *obs2_reply_path)
+					      struct tlv_onionmsg_payload_reply_path *reply_path)
 {
 	size_t len = tal_count(invreqbin);
 	struct invreq *ir = tal(cmd, struct invreq);
 	struct out_req *req;
 	int bad_feature;
 
-	ir->obs2_reply_path = tal_steal(ir, obs2_reply_path);
 	ir->reply_path = tal_steal(ir, reply_path);
 
 	ir->invreq = fromwire_tlv_invoice_request(cmd, &invreqbin, &len);

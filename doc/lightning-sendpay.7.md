@@ -67,23 +67,27 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **id** (u64): unique ID for this payment attempt
-- **payment_hash** (hash): the hash of the *payment_preimage* which will prove payment (always 64 characters)
+- **payment\_hash** (hash): the hash of the *payment_preimage* which will prove payment (always 64 characters)
 - **status** (string): status of the payment (could be complete if already sent previously) (one of "pending", "complete")
-- **created_at** (u64): the UNIX timestamp showing when this payment was initiated
-- **amount_sent_msat** (msat): The amount sent
+- **created\_at** (u64): the UNIX timestamp showing when this payment was initiated
+- **amount\_sent\_msat** (msat): The amount sent
 - **groupid** (u64, optional): Grouping key to disambiguate multiple attempts to pay an invoice or the same payment_hash
-- **amount_msat** (msat, optional): The amount delivered to destination (if known)
+- **amount\_msat** (msat, optional): The amount delivered to destination (if known)
 - **destination** (pubkey, optional): the final destination of the payment if known
+- **completed\_at** (u64, optional): the UNIX timestamp showing when this payment was completed
 - **label** (string, optional): the *label*, if given to sendpay
 - **partid** (u64, optional): the *partid*, if given to sendpay
 - **bolt11** (string, optional): the bolt11 string (if supplied)
 - **bolt12** (string, optional): the bolt12 string (if supplied: **experimental-offers** only).
 
 If **status** is "complete":
-  - **payment_preimage** (secret): the proof of payment: SHA256 of this **payment_hash** (always 64 characters)
+
+  - **payment\_preimage** (secret): the proof of payment: SHA256 of this **payment_hash** (always 64 characters)
 
 If **status** is "pending":
+
   - **message** (string): Monitor status with listpays or waitsendpay
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
@@ -139,4 +143,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:a7f55104f3bdb21057a410a33902b92aca38aaa83b1e0e7e6876a911316132ed)
+[comment]: # ( SHA256STAMP:c129f537b1af8a5dc767a25a72be419634cb21ebc26a9e6b9bb091db8db7e6ca)

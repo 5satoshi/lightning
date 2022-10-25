@@ -4,12 +4,6 @@ from pathlib import Path
 
 from msggen.model import Method, CompositeField, Service
 
-# Sometimes we want to rename a method, due to a name clash
-# FIXME: need to be generalized?
-method_name_override = {
-    "Connect": "ConnectPeer",
-}
-
 
 def repo_root():
     path = subprocess.check_output(["git", "rev-parse", "--show-toplevel"])
@@ -34,7 +28,7 @@ def load_jsonrpc_method(name, schema_dir: str = None):
     response.typename += "Response"
 
     return Method(
-        name=method_name_override.get(name, name),
+        name,
         request=request,
         response=response,
     )
@@ -88,12 +82,11 @@ def load_jsonrpc_service(schema_dir: str = None):
         # "fetchinvoice",
         # "fundchannel_cancel",
         # "fundchannel_complete",
-        # "fundchannel",
+        "FundChannel",
         # "fundchannel_start",
         # "funderupdate",
         # "getlog",
         "GetRoute",
-        # "getsharedsecret",
         "ListForwards",
         # "listoffers",
         "ListPays",
@@ -114,12 +107,13 @@ def load_jsonrpc_service(schema_dir: str = None):
         # "sendinvoice",
         # "sendonionmessage",
         # "setchannelfee",
+        "SetChannel",
         "SignMessage",
         # "unreserveinputs",
         # "waitblockheight",
         # "ListConfigs",
         # "check",  # No point in mapping this one
-        # "Stop",  # Breaks a core assumption (root is an object) can't map unless we change this
+        "Stop",
         # "notifications",  # No point in mapping this
         # "help",
     ]

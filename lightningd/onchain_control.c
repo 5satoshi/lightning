@@ -1,5 +1,6 @@
 #include "config.h"
 #include <bitcoin/feerate.h>
+#include <ccan/tal/str/str.h>
 #include <common/key_derive.h>
 #include <common/type_to_string.h>
 #include <db/exec.h>
@@ -8,6 +9,7 @@
 #include <inttypes.h>
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
+#include <lightningd/channel_control.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/onchain_control.h>
@@ -346,9 +348,9 @@ static void handle_onchain_broadcast_tx(struct channel *channel,
 	/* If the onchaind signals this as RBF-able, then we also
 	 * set allowhighfees, as the transaction may be RBFed into
 	 * high feerates as protection against the MAD-HTLC attack.  */
-	broadcast_tx_ahf(channel->peer->ld->topology, channel,
-			 tx, is_rbf,
-			 is_rbf ? &handle_onchain_broadcast_rbf_tx_cb : NULL);
+	broadcast_tx(channel->peer->ld->topology, channel,
+		     tx, NULL, is_rbf,
+		     is_rbf ? &handle_onchain_broadcast_rbf_tx_cb : NULL);
 }
 
 static void handle_onchain_unwatch_tx(struct channel *channel, const u8 *msg)
@@ -620,7 +622,18 @@ enum watch_result onchaind_funding_spent(struct channel *channel,
 	if (channel->closer != NUM_SIDES)
 		reason = REASON_UNKNOWN;  /* will use last cause as reason */
 
-	channel_fail_permanent(channel, reason, "Funding transaction spent");
+	channel_fail_permanent(channel, reason,
+			       "Funding transaction spent");
+
+	/* If we haven't posted the open event yet, post an open */
+	if (!channel->scid || !channel->remote_channel_ready) {
+		u32 blkh;
+		/* Blockheight will be zero if it's not in chain */
+		blkh = wallet_transaction_height(channel->peer->ld->wallet,
+						 &channel->funding.txid);
+		channel_record_open(channel, blkh, true);
+	}
+
 
 	/* We could come from almost any state. */
 	/* NOTE(mschmoock) above comment is wrong, since we failed above! */
@@ -628,7 +641,7 @@ enum watch_result onchaind_funding_spent(struct channel *channel,
 			  channel->state,
 			  FUNDING_SPEND_SEEN,
 			  reason,
-			  "Onchain funding spend");
+			  tal_fmt(tmpctx, "Onchain funding spend"));
 
 	hsmfd = hsm_get_client_fd(ld, &channel->peer->id,
 				  channel->dbid,
@@ -669,8 +682,17 @@ enum watch_result onchaind_funding_spent(struct channel *channel,
 			   channel->final_key_idx);
 		return KEEP_WATCHING;
 	}
-	/* This could be a mutual close, but it doesn't matter. */
-	bitcoin_txid(channel->last_tx, &our_last_txid);
+
+	/* This could be a mutual close, but it doesn't matter.
+	 * We don't need this for stub channels as well */
+	if (!is_stub_scid(channel->scid))
+		bitcoin_txid(channel->last_tx, &our_last_txid);
+	else
+	/* Dummy txid for stub channel to make valgrind happy. */
+		bitcoin_txid_from_hex("80cea306607b708a03a1854520729d"
+				"a884e4317b7b51f3d4a622f88176f5e034",
+				64,
+				&our_last_txid);
 
 	/* We try to get the feerate for each transaction type, 0 if estimation
 	 * failed. */
@@ -683,10 +705,10 @@ enum watch_result onchaind_funding_spent(struct channel *channel,
 		if (!feerates[i]) {
 			/* We have at least one data point: the last tx's feerate. */
 			struct amount_sat fee = channel->funding_sats;
-			for (size_t i = 0;
-			     i < channel->last_tx->wtx->num_outputs; i++) {
+			for (size_t j = 0;
+			     j < channel->last_tx->wtx->num_outputs; j++) {
 				struct amount_asset asset =
-					bitcoin_tx_output_get_amount(channel->last_tx, i);
+					bitcoin_tx_output_get_amount(channel->last_tx, j);
 				struct amount_sat amt;
 				assert(amount_asset_is_main(&asset));
 				amt = amount_asset_to_sat(&asset);

@@ -2,7 +2,8 @@
 #include "../amount.c"
 #include "../bigsize.c"
 #include "../bolt12_merkle.c"
-#include "../json.c"
+#include "../json_parse.c"
+#include "../json_parse_simple.c"
 #include "../../wire/fromwire.c"
 #include "../../wire/tlvstream.c"
 #if EXPERIMENTAL_FEATURES
@@ -28,16 +29,12 @@ void fromwire_node_id(const u8 **cursor UNNEEDED, size_t *max UNNEEDED, struct n
 /* Generated stub for fromwire_onionmsg_path */
 struct onionmsg_path *fromwire_onionmsg_path(const tal_t *ctx UNNEEDED, const u8 **cursor UNNEEDED, size_t *plen UNNEEDED)
 { fprintf(stderr, "fromwire_onionmsg_path called!\n"); abort(); }
-/* Generated stub for json_add_member */
-void json_add_member(struct json_stream *js UNNEEDED,
-		     const char *fieldname UNNEEDED,
-		     bool quote UNNEEDED,
-		     const char *fmt UNNEEDED, ...)
-{ fprintf(stderr, "json_add_member called!\n"); abort(); }
-/* Generated stub for json_member_direct */
-char *json_member_direct(struct json_stream *js UNNEEDED,
-			 const char *fieldname UNNEEDED, size_t extra UNNEEDED)
-{ fprintf(stderr, "json_member_direct called!\n"); abort(); }
+/* Generated stub for mvt_tag_str */
+const char *mvt_tag_str(enum mvt_tag tag UNNEEDED)
+{ fprintf(stderr, "mvt_tag_str called!\n"); abort(); }
+/* Generated stub for node_id_from_hexstr */
+bool node_id_from_hexstr(const char *str UNNEEDED, size_t slen UNNEEDED, struct node_id *id UNNEEDED)
+{ fprintf(stderr, "node_id_from_hexstr called!\n"); abort(); }
 /* Generated stub for towire */
 void towire(u8 **pptr UNNEEDED, const void *data UNNEEDED, size_t len UNNEEDED)
 { fprintf(stderr, "towire called!\n"); abort(); }
@@ -122,7 +119,7 @@ int main(int argc, char *argv[])
 		char *dir = getenv("BOLTDIR");
 		json = grab_file(tmpctx,
 				 path_join(tmpctx,
-					   dir ? dir : "../lightning-rfc",
+					   dir ? dir : "../bolts",
 					   "bolt12/merkle-test.json"));
 		if (!json) {
 			printf("test file not found, skipping\n");

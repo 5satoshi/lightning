@@ -1,6 +1,6 @@
 #include "config.h"
 #include <common/bolt11.h>
-#include <common/json_helpers.h>
+#include <common/json_parse.h>
 #include <common/type_to_string.h>
 #include <gossipd/gossipd_wiregen.h>
 #include <lightningd/channel.h>
@@ -106,6 +106,15 @@ routehint_candidates(const tal_t *ctx,
 
 		/* Check channel is in CHANNELD_NORMAL */
 		candidate.c = find_channel_by_scid(peer, &r->short_channel_id);
+
+		/* Try seeing if we should be using a remote alias
+		 * instead. The `listpeers` result may have returned
+		 * the REMOTE alias, because it is the only scid we
+		 * have, and it is mandatory once the channel is in
+		 * CHANNELD_NORMAL. */
+		if (!candidate.c)
+			candidate.c = find_channel_by_alias(peer, &r->short_channel_id, REMOTE);
+
 		if (!candidate.c) {
 			log_debug(ld->log, "%s: channel not found in peer %s",
 				  type_to_string(tmpctx,
@@ -162,7 +171,10 @@ routehint_candidates(const tal_t *ctx,
 		/* Consider only hints they gave */
 		if (hints) {
 			log_debug(ld->log, "We have hints!");
-			if (!scid_in_arr(hints, &r->short_channel_id)) {
+			/* Allow specification by alias, too */
+			if (!scid_in_arr(hints, &r->short_channel_id)
+			    && (!candidate.c->alias[REMOTE]
+				|| !scid_in_arr(hints, candidate.c->alias[REMOTE]))) {
 				log_debug(ld->log, "scid %s not in hints",
 					  type_to_string(tmpctx,
 							 struct short_channel_id,
@@ -193,6 +205,22 @@ routehint_candidates(const tal_t *ctx,
 					     candidate.capacity))
 				fatal("Overflow summing offline capacity!");
 			continue;
+		}
+
+		/* BOLT-channel-type #2:
+		 *   - if `channel_type` has `option_scid_alias` set:
+		 *       - MUST NOT use the real `short_channel_id` in
+		 *         BOLT 11 `r` fields.
+		 */
+		/* FIXME: We don't remember the type explicitly, so
+		 * we just assume all private channels negotiated since
+		 * we had alias support want this. */
+
+		/* Note explicit flag test here: if we're told to expose all
+		 * private channels, then "is_public" is forced true */
+		if (!(candidate.c->channel_flags & CHANNEL_FLAGS_ANNOUNCE_CHANNEL)
+		    && candidate.c->alias[REMOTE]) {
+			r->short_channel_id = *candidate.c->alias[REMOTE];
 		}
 
 		/* OK, finish it and append to one of the arrays. */

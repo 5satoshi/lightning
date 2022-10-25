@@ -7,8 +7,7 @@
 #include <ccan/tal/grab_file/grab_file.h>
 #include <ccan/tal/path/path.h>
 #include <common/channel_id.h>
-#include <common/json.h>
-#include <common/json_helpers.h>
+#include <common/json_parse.h>
 #include <common/json_stream.h>
 #include <common/setup.h>
 #include <common/wireaddr.h>
@@ -21,9 +20,6 @@ bool amount_asset_is_main(struct amount_asset *asset UNNEEDED)
 /* Generated stub for amount_asset_to_sat */
 struct amount_sat amount_asset_to_sat(struct amount_asset *asset UNNEEDED)
 { fprintf(stderr, "amount_asset_to_sat called!\n"); abort(); }
-/* Generated stub for amount_msat */
-struct amount_msat amount_msat(u64 millisatoshis UNNEEDED)
-{ fprintf(stderr, "amount_msat called!\n"); abort(); }
 /* Generated stub for amount_sat */
 struct amount_sat amount_sat(u64 satoshis UNNEEDED)
 { fprintf(stderr, "amount_sat called!\n"); abort(); }
@@ -66,31 +62,34 @@ bool fromwire_channel_id(const u8 **cursor UNNEEDED, size_t *max UNNEEDED,
 /* Generated stub for fromwire_node_id */
 void fromwire_node_id(const u8 **cursor UNNEEDED, size_t *max UNNEEDED, struct node_id *id UNNEEDED)
 { fprintf(stderr, "fromwire_node_id called!\n"); abort(); }
-/* Generated stub for json_add_member */
-void json_add_member(struct json_stream *js UNNEEDED,
-		     const char *fieldname UNNEEDED,
-		     bool quote UNNEEDED,
-		     const char *fmt UNNEEDED, ...)
-{ fprintf(stderr, "json_add_member called!\n"); abort(); }
-/* Generated stub for json_member_direct */
-char *json_member_direct(struct json_stream *js UNNEEDED,
-			 const char *fieldname UNNEEDED, size_t extra UNNEEDED)
-{ fprintf(stderr, "json_member_direct called!\n"); abort(); }
-/* Generated stub for json_object_end */
-void json_object_end(struct json_stream *js UNNEEDED)
-{ fprintf(stderr, "json_object_end called!\n"); abort(); }
-/* Generated stub for json_object_start */
-void json_object_start(struct json_stream *ks UNNEEDED, const char *fieldname UNNEEDED)
-{ fprintf(stderr, "json_object_start called!\n"); abort(); }
-/* Generated stub for node_id_from_hexstr */
-bool node_id_from_hexstr(const char *str UNNEEDED, size_t slen UNNEEDED, struct node_id *id UNNEEDED)
-{ fprintf(stderr, "node_id_from_hexstr called!\n"); abort(); }
-/* Generated stub for parse_amount_msat */
-bool parse_amount_msat(struct amount_msat *msat UNNEEDED, const char *s UNNEEDED, size_t slen UNNEEDED)
-{ fprintf(stderr, "parse_amount_msat called!\n"); abort(); }
-/* Generated stub for parse_amount_sat */
-bool parse_amount_sat(struct amount_sat *sat UNNEEDED, const char *s UNNEEDED, size_t slen UNNEEDED)
-{ fprintf(stderr, "parse_amount_sat called!\n"); abort(); }
+/* Generated stub for json_get_member */
+const jsmntok_t *json_get_member(const char *buffer UNNEEDED, const jsmntok_t tok[] UNNEEDED,
+				 const char *label UNNEEDED)
+{ fprintf(stderr, "json_get_member called!\n"); abort(); }
+/* Generated stub for json_next */
+const jsmntok_t *json_next(const jsmntok_t *tok UNNEEDED)
+{ fprintf(stderr, "json_next called!\n"); abort(); }
+/* Generated stub for json_to_pubkey */
+bool json_to_pubkey(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
+		    struct pubkey *pubkey UNNEEDED)
+{ fprintf(stderr, "json_to_pubkey called!\n"); abort(); }
+/* Generated stub for json_to_secret */
+bool json_to_secret(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED, struct secret *dest UNNEEDED)
+{ fprintf(stderr, "json_to_secret called!\n"); abort(); }
+/* Generated stub for json_to_short_channel_id */
+bool json_to_short_channel_id(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
+			      struct short_channel_id *scid UNNEEDED)
+{ fprintf(stderr, "json_to_short_channel_id called!\n"); abort(); }
+/* Generated stub for json_tok_bin_from_hex */
+u8 *json_tok_bin_from_hex(const tal_t *ctx UNNEEDED, const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED)
+{ fprintf(stderr, "json_tok_bin_from_hex called!\n"); abort(); }
+/* Generated stub for json_tok_startswith */
+bool json_tok_startswith(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
+			 const char *prefix UNNEEDED)
+{ fprintf(stderr, "json_tok_startswith called!\n"); abort(); }
+/* Generated stub for json_tok_streq */
+bool json_tok_streq(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED, const char *str UNNEEDED)
+{ fprintf(stderr, "json_tok_streq called!\n"); abort(); }
 /* Generated stub for towire_amount_msat */
 void towire_amount_msat(u8 **pptr UNNEEDED, const struct amount_msat msat UNNEEDED)
 { fprintf(stderr, "towire_amount_msat called!\n"); abort(); }
@@ -186,7 +185,7 @@ int main(int argc, char *argv[])
 		char *dir = getenv("BOLTDIR");
 		json = grab_file(tmpctx,
 				 path_join(tmpctx,
-					   dir ? dir : "../lightning-rfc",
+					   dir ? dir : "../bolts",
 					   "bolt04/route-blinding-override-test.json"));
 		if (!json) {
 			printf("test file not found, skipping\n");
@@ -328,7 +327,7 @@ int main(int argc, char *argv[])
 	json_for_each_arr(i, t, unblinding_hops) {
 		struct privkey me;
 		struct secret ss;
-		struct pubkey blinding, expected_blinding;
+		struct pubkey blindingpub, expected_blinding;
 		struct pubkey onion_key, next_node;
 
 		assert(json_to_secret(json,
@@ -338,20 +337,20 @@ int main(int argc, char *argv[])
 		mykey = &me;
 		assert(json_to_pubkey(json,
 				      json_get_member(json, t, "ephemeral_pubkey"),
-				      &blinding));
+				      &blindingpub));
 
-		assert(unblind_onion(&blinding, test_ecdh, &onion_key, &ss));
+		assert(unblind_onion(&blindingpub, test_ecdh, &onion_key, &ss));
 		if (i != unblinding_hops->size - 1) {
-			assert(decrypt_enctlv(&blinding, &ss, encrypted_data[i], &next_node, &blinding));
+			assert(decrypt_enctlv(&blindingpub, &ss, encrypted_data[i], &next_node, &blindingpub));
 			assert(json_to_pubkey(json,
 					      json_get_member(json, t, "next_ephemeral_pubkey"),
 					      &expected_blinding));
-			assert(pubkey_eq(&blinding, &expected_blinding));
+			assert(pubkey_eq(&blindingpub, &expected_blinding));
 		} else {
 			struct secret *path_id;
 			struct pubkey my_id, alias;
 			assert(pubkey_from_privkey(&me, &my_id));
-			assert(decrypt_final_enctlv(tmpctx, &blinding, &ss,
+			assert(decrypt_final_enctlv(tmpctx, &blindingpub, &ss,
 						    encrypted_data[i],
 						    &my_id, &alias,
 						    &path_id));

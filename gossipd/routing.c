@@ -33,6 +33,16 @@ struct pending_node_announce {
 	struct peer *peer_softref;
 };
 
+/* As per the below BOLT #7 quote, we delay forgetting a channel until 12
+ * blocks after we see it close.  This gives time for splicing (or even other
+ * opens) to replace the channel, and broadcast it after 6 blocks. */
+struct dying_channel {
+	struct short_channel_id scid;
+	u32 deadline_blockheight;
+	/* Where the dying_channel marker is in the store. */
+	struct broadcastable marker;
+};
+
 /* We consider a reasonable gossip rate to be 2 per day, with burst of
  * 4 per day.  So we use a granularity of one hour. */
 #define TOKENS_PER_MSG 12
@@ -222,16 +232,16 @@ static void memleak_help_routing_tables(struct htable *memtable,
 	struct node *n;
 	struct node_map_iter nit;
 
-	memleak_remove_htable(memtable, &rstate->nodes->raw);
-	memleak_remove_htable(memtable, &rstate->pending_node_map->raw);
-	memleak_remove_htable(memtable, &rstate->pending_cannouncements.raw);
-	memleak_remove_uintmap(memtable, &rstate->unupdated_chanmap);
+	memleak_scan_htable(memtable, &rstate->nodes->raw);
+	memleak_scan_htable(memtable, &rstate->pending_node_map->raw);
+	memleak_scan_htable(memtable, &rstate->pending_cannouncements.raw);
+	memleak_scan_uintmap(memtable, &rstate->unupdated_chanmap);
 
 	for (n = node_map_first(rstate->nodes, &nit);
 	     n;
 	     n = node_map_next(rstate->nodes, &nit)) {
 		if (node_uses_chan_map(n))
-			memleak_remove_htable(memtable, &n->chans.map.raw);
+			memleak_scan_htable(memtable, &n->chans.map.raw);
 	}
 }
 #endif /* DEVELOPER */
@@ -249,8 +259,8 @@ static void txout_failure_age(struct routing_state *rstate)
 						   txout_failure_age, rstate);
 }
 
-void add_to_txout_failures(struct routing_state *rstate,
-			   const struct short_channel_id *scid)
+static void add_to_txout_failures(struct routing_state *rstate,
+				  const struct short_channel_id *scid)
 {
 	if (uintmap_add(&rstate->txout_failures, scid->u64, true)
 	    && ++rstate->num_txout_failures == 10000) {
@@ -288,6 +298,7 @@ struct routing_state *new_routing_state(const tal_t *ctx,
 	rstate->gs = gossip_store_new(rstate, peers);
 	rstate->local_channel_announced = false;
 	rstate->last_timestamp = 0;
+	rstate->dying_channels = tal_arr(rstate, struct dying_channel, 0);
 
 	pending_cannouncement_map_init(&rstate->pending_cannouncements);
 
@@ -368,6 +379,7 @@ static struct node *new_node(struct routing_state *rstate,
 	n->id = *id;
 	memset(n->chans.arr, 0, sizeof(n->chans.arr));
 	broadcastable_init(&n->bcast);
+	broadcastable_init(&n->rgraph);
 	n->tokens = TOKEN_MAX;
 	node_map_add(rstate->nodes, n);
 	tal_add_destructor2(n, destroy_node, rstate);
@@ -430,6 +442,7 @@ static void force_node_announce_rexmit(struct routing_state *rstate,
 	bool is_local = node_id_eq(&node->id, &rstate->local_id);
 	announce = gossip_store_get(tmpctx, rstate->gs, node->bcast.index);
 
+	u32 initial_bcast_index = node->bcast.index;
 	gossip_store_delete(rstate->gs,
 			    &node->bcast,
 			    WIRE_NODE_ANNOUNCEMENT);
@@ -437,7 +450,22 @@ static void force_node_announce_rexmit(struct routing_state *rstate,
 					     announce,
 					     node->bcast.timestamp,
 					     is_local,
+					     false,
 					     NULL);
+	if (node->rgraph.index == initial_bcast_index){
+		node->rgraph.index = node->bcast.index;
+	} else {
+		announce = gossip_store_get(tmpctx, rstate->gs, node->rgraph.index);
+		gossip_store_delete(rstate->gs,
+				    &node->rgraph,
+				    WIRE_NODE_ANNOUNCEMENT);
+		node->rgraph.index = gossip_store_add(rstate->gs,
+						      announce,
+						      node->rgraph.timestamp,
+						      is_local,
+						      false,
+						      NULL);
+	}
 }
 
 static void remove_chan_from_node(struct routing_state *rstate,
@@ -461,6 +489,10 @@ static void remove_chan_from_node(struct routing_state *rstate,
 
 	/* Last channel?  Simply delete node (and associated announce) */
 	if (num_chans == 0) {
+		if(node->rgraph.index != node->bcast.index)
+			gossip_store_delete(rstate->gs,
+					    &node->rgraph,
+					    WIRE_NODE_ANNOUNCEMENT);
 		gossip_store_delete(rstate->gs,
 				    &node->bcast,
 				    WIRE_NODE_ANNOUNCEMENT);
@@ -473,9 +505,15 @@ static void remove_chan_from_node(struct routing_state *rstate,
 
 	/* Removed only public channel?  Remove node announcement. */
 	if (!node_has_broadcastable_channels(node)) {
+		if(node->rgraph.index != node->bcast.index)
+			gossip_store_delete(rstate->gs,
+					    &node->rgraph,
+					    WIRE_NODE_ANNOUNCEMENT);
 		gossip_store_delete(rstate->gs,
 				    &node->bcast,
 				    WIRE_NODE_ANNOUNCEMENT);
+		node->rgraph.index = node->bcast.index = 0;
+		node->rgraph.timestamp = node->bcast.timestamp = 0;
 	} else if (node_announce_predates_channels(node)) {
 		/* node announcement predates all channel announcements?
 		 * Move to end (we could, in theory, move to just past next
@@ -493,18 +531,23 @@ static void destroy_chan_check(struct chan *chan)
 }
 #endif
 
-/* We used to make this a tal_add_destructor2, but that costs 40 bytes per
- * chan, and we only ever explicitly free it anyway. */
-void free_chan(struct routing_state *rstate, struct chan *chan)
+static void free_chans_from_node(struct routing_state *rstate, struct chan *chan)
 {
 	remove_chan_from_node(rstate, chan->nodes[0], chan);
 	remove_chan_from_node(rstate, chan->nodes[1], chan);
 
-	uintmap_del(&rstate->chanmap, chan->scid.u64);
-
 #if DEVELOPER
 	chan->sat.satoshis = (unsigned long)chan; /* Raw: dev-hack */
 #endif
+}
+
+/* We used to make this a tal_add_destructor2, but that costs 40 bytes per
+ * chan, and we only ever explicitly free it anyway. */
+void free_chan(struct routing_state *rstate, struct chan *chan)
+{
+	free_chans_from_node(rstate, chan);
+	uintmap_del(&rstate->chanmap, chan->scid.u64);
+
 	tal_free(chan);
 }
 
@@ -515,6 +558,7 @@ static void init_half_chan(struct routing_state *rstate,
 	struct half_chan *c = &chan->half[channel_idx];
 
 	broadcastable_init(&c->bcast);
+	broadcastable_init(&c->rgraph);
 	c->tokens = TOKEN_MAX;
 }
 
@@ -736,7 +780,8 @@ static void process_pending_node_announcement(struct routing_state *rstate,
 		if (!routing_add_node_announcement(rstate,
 						   pna->node_announcement,
 						   pna->index,
-						   pna->peer_softref, NULL))
+						   pna->peer_softref, NULL,
+						   false))
 			status_unusual("pending node_announcement %s too old?",
 				       tal_hex(tmpctx, pna->node_announcement));
 		/* Never send this again. */
@@ -785,8 +830,47 @@ static void add_channel_announce_to_broadcast(struct routing_state *rstate,
 						     channel_announce,
 						     chan->bcast.timestamp,
 						     is_local,
+						     false,
 						     addendum);
 	rstate->local_channel_announced |= is_local;
+}
+
+static void delete_chan_messages_from_store(struct routing_state *rstate,
+					    struct chan *chan)
+{
+	int update_type, announcment_type;
+
+	if (is_chan_public(chan)) {
+		update_type = WIRE_CHANNEL_UPDATE;
+		announcment_type = WIRE_CHANNEL_ANNOUNCEMENT;
+	} else {
+		update_type = WIRE_GOSSIP_STORE_PRIVATE_UPDATE;
+		announcment_type = WIRE_GOSSIP_STORE_PRIVATE_CHANNEL;
+	}
+
+	/* If these aren't in the store, these are noops. */
+	gossip_store_delete(rstate->gs,
+			    &chan->bcast, announcment_type);
+	if (chan->half[0].rgraph.index != chan->half[0].bcast.index)
+		gossip_store_delete(rstate->gs,
+				    &chan->half[0].rgraph, update_type);
+	gossip_store_delete(rstate->gs,
+			    &chan->half[0].bcast, update_type);
+	if (chan->half[1].rgraph.index != chan->half[1].bcast.index)
+		gossip_store_delete(rstate->gs,
+				    &chan->half[1].rgraph, update_type);
+	gossip_store_delete(rstate->gs,
+			    &chan->half[1].bcast, update_type);
+}
+
+static void remove_channel_from_store(struct routing_state *rstate,
+				      struct chan *chan)
+{
+	/* Put in tombstone marker */
+	gossip_store_mark_channel_deleted(rstate->gs, &chan->scid);
+
+	/* Now delete old entries. */
+	delete_chan_messages_from_store(rstate, chan);
 }
 
 bool routing_add_channel_announcement(struct routing_state *rstate,
@@ -795,7 +879,7 @@ bool routing_add_channel_announcement(struct routing_state *rstate,
 				      u32 index,
 				      struct peer *peer)
 {
-	struct chan *chan;
+	struct chan *oldchan;
 	secp256k1_ecdsa_signature node_signature_1, node_signature_2;
 	secp256k1_ecdsa_signature bitcoin_signature_1, bitcoin_signature_2;
 	u8 *features;
@@ -821,34 +905,35 @@ bool routing_add_channel_announcement(struct routing_state *rstate,
 	/* The channel may already exist if it was non-public from
 	 * local_add_channel(); normally we don't accept new
 	 * channel_announcements.  See handle_channel_announcement. */
-	chan = get_channel(rstate, &scid);
+	oldchan = get_channel(rstate, &scid);
 
 	/* private updates will exist in the store before the announce: we
 	 * can't index those for broadcast since they would predate it, so we
 	 * add fresh ones. */
-	if (chan) {
+	if (oldchan) {
 		/* If this was in the gossip_store, gossip_store is bad! */
 		if (index) {
 			status_broken("gossip_store channel_announce"
 				      " %u replaces %u!",
-				      index, chan->bcast.index);
+				      index, oldchan->bcast.index);
 			return false;
 		}
 
 		/* Reload any private updates */
-		if (chan->half[0].bcast.index)
+		if (oldchan->half[0].bcast.index)
 			private_updates[0]
 				= gossip_store_get_private_update(NULL,
 						   rstate->gs,
-						   chan->half[0].bcast.index);
-		if (chan->half[1].bcast.index)
+						   oldchan->half[0].bcast.index);
+		if (oldchan->half[1].bcast.index)
 			private_updates[1]
 				= gossip_store_get_private_update(NULL,
 						   rstate->gs,
-						   chan->half[1].bcast.index);
+						   oldchan->half[1].bcast.index);
 
-		remove_channel_from_store(rstate, chan);
-		free_chan(rstate, chan);
+		/* We don't delete it from store until *after* we've put the
+		 * other one in! */
+		uintmap_del(&rstate->chanmap, oldchan->scid.u64);
 	}
 
 	uc = tal(rstate, struct unupdated_channel);
@@ -870,10 +955,19 @@ bool routing_add_channel_announcement(struct routing_state *rstate,
 	/* If we had private updates, they'll immediately create the channel. */
 	if (private_updates[0])
 		routing_add_channel_update(rstate, take(private_updates[0]), 0,
-					   peer, false);
+					   peer, false, false);
 	if (private_updates[1])
 		routing_add_channel_update(rstate, take(private_updates[1]), 0,
-					   peer, false);
+					   peer, false, false);
+
+	/* Now we can finish cleanup of gossip store, so there's no window where
+	 * channel (or nodes) vanish. */
+	if (oldchan) {
+		/* Mark private messages deleted, but don't tombstone the channel! */
+		delete_chan_messages_from_store(rstate, oldchan);
+		free_chans_from_node(rstate, oldchan);
+		tal_free(oldchan);
+	}
 
 	return true;
 }
@@ -1192,7 +1286,8 @@ bool routing_add_channel_update(struct routing_state *rstate,
 				const u8 *update TAKES,
 				u32 index,
 				struct peer *peer,
-				bool ignore_timestamp)
+				bool ignore_timestamp,
+				bool force_spam_flag)
 {
 	secp256k1_ecdsa_signature signature;
 	struct short_channel_id short_channel_id;
@@ -1208,21 +1303,13 @@ bool routing_add_channel_update(struct routing_state *rstate,
 	struct unupdated_channel *uc;
 	u8 direction;
 	struct amount_sat sat;
+	bool spam;
 
 	/* Make sure we own msg, even if we don't save it. */
 	if (taken(update))
 		tal_steal(tmpctx, update);
 
-	if (!fromwire_channel_update(update, &signature, &chain_hash,
-				     &short_channel_id, &timestamp,
-				     &message_flags, &channel_flags,
-				     &expiry, &htlc_minimum, &fee_base_msat,
-				     &fee_proportional_millionths))
-		return false;
-	/* If it's flagged as containing the optional field, reparse for
-	 * the optional field */
-	if ((message_flags & ROUTING_OPT_HTLC_MAX_MSAT) &&
-			!fromwire_channel_update_option_channel_htlc_max(
+	if (!fromwire_channel_update(
 				update, &signature, &chain_hash,
 				&short_channel_id, &timestamp,
 				&message_flags, &channel_flags,
@@ -1246,21 +1333,10 @@ bool routing_add_channel_update(struct routing_state *rstate,
 		sat = uc->sat;
 	}
 
-	if (message_flags & ROUTING_OPT_HTLC_MAX_MSAT) {
-		/* Reject update if the `htlc_maximum_msat` is greater
-		 * than the total available channel satoshis */
-		if (amount_msat_greater_sat(htlc_maximum, sat))
-			return false;
-	} else {
-		/* If not indicated, set htlc_max_msat to channel capacity */
-		if (!amount_sat_to_msat(&htlc_maximum, sat)) {
-			status_peer_broken(peer ? &peer->id : NULL,
-					   "Channel capacity %s overflows!",
-					   type_to_string(tmpctx, struct amount_sat,
-							  &sat));
-			return false;
-		}
-	}
+	/* Reject update if the `htlc_maximum_msat` is greater
+	 * than the total available channel satoshis */
+	if (amount_msat_greater_sat(htlc_maximum, sat))
+		return false;
 
 	/* Check timestamp is sane (unless from store). */
 	if (!index && !timestamp_reasonable(rstate, timestamp)) {
@@ -1283,14 +1359,23 @@ bool routing_add_channel_update(struct routing_state *rstate,
 	hc = &chan->half[direction];
 
 	if (is_halfchan_defined(hc) && !ignore_timestamp) {
-		/* If we're loading from store, duplicate entries are a bug. */
-		if (index != 0) {
-			status_broken("gossip_store channel_update %u replaces %u!",
-				      index, hc->bcast.index);
-			return false;
+		/* The gossip_store should contain a single broadcastable entry
+		 * and potentially one rate-limited entry. Any more is a bug */
+		if (index){
+			if (!force_spam_flag){
+				status_broken("gossip_store broadcastable "
+					      "channel_update %u replaces %u!",
+					      index, hc->bcast.index);
+				return false;
+			} else if (hc->bcast.index != hc->rgraph.index){
+				status_broken("gossip_store rate-limited "
+					      "channel_update %u replaces %u!",
+					      index, hc->rgraph.index);
+				return false;
+			}
 		}
 
-		if (timestamp <= hc->bcast.timestamp) {
+		if (timestamp <= hc->rgraph.timestamp) {
 			SUPERVERBOSE("Ignoring outdated update.");
 			/* Ignoring != failing */
 			return true;
@@ -1313,26 +1398,50 @@ bool routing_add_channel_update(struct routing_state *rstate,
 		if (!ratelimit(rstate,
 			       &hc->tokens, hc->bcast.timestamp, timestamp)) {
 			status_peer_debug(peer ? &peer->id : NULL,
-					  "Ignoring spammy update for %s/%u"
+					  "Spammy update for %s/%u flagged"
 					  " (last %u, now %u)",
 					  type_to_string(tmpctx,
 							 struct short_channel_id,
 							 &short_channel_id),
 					  direction,
 					  hc->bcast.timestamp, timestamp);
-			/* Ignoring != failing */
-			return true;
+			spam = true;
+		} else {
+			spam = false;
 		}
+	} else {
+		spam = false;
 	}
-
-	chan->half[direction].bcast.timestamp = timestamp;
-
-	/* Safe even if was never added, but if it's a private channel it
-	 * would be a WIRE_GOSSIP_STORE_PRIVATE_UPDATE. */
-	gossip_store_delete(rstate->gs, &hc->bcast,
-			    is_chan_public(chan)
-			    ? WIRE_CHANNEL_UPDATE
-			    : WIRE_GOSSIP_STORE_PRIVATE_UPDATE);
+	if (force_spam_flag)
+		spam = true;
+	/* Routing graph always uses the latest message. */
+	hc->rgraph.timestamp = timestamp;
+	if (spam) {
+		/* Remove the prior spam update if it exists. */
+		if (hc->rgraph.index != hc->bcast.index) {
+			gossip_store_delete(rstate->gs, &hc->rgraph,
+					    is_chan_public(chan)
+					    ? WIRE_CHANNEL_UPDATE
+					    : WIRE_GOSSIP_STORE_PRIVATE_UPDATE);
+		}
+	} else {
+		/* Safe to broadcast */
+		hc->bcast.timestamp = timestamp;
+		/* Remove prior spam update if one exists. */
+		if (hc->rgraph.index != hc->bcast.index) {
+			/* If it's a private channel it would be a
+			 * WIRE_GOSSIP_STORE_PRIVATE_UPDATE. */
+			gossip_store_delete(rstate->gs, &hc->rgraph,
+					    is_chan_public(chan)
+					    ? WIRE_CHANNEL_UPDATE
+					    : WIRE_GOSSIP_STORE_PRIVATE_UPDATE);
+		}
+		/* Harmless if it was never added. */
+		gossip_store_delete(rstate->gs, &hc->bcast,
+				    is_chan_public(chan)
+				    ? WIRE_CHANNEL_UPDATE
+				    : WIRE_GOSSIP_STORE_PRIVATE_UPDATE);
+	}
 
 	/* BOLT #7:
 	 *   - MUST consider the `timestamp` of the `channel_announcement` to be
@@ -1354,23 +1463,31 @@ bool routing_add_channel_update(struct routing_state *rstate,
 			hc->bcast.index
 				= gossip_store_add_private_update(rstate->gs,
 								  update);
-		} else
+			/* No need to separately track spam for private
+			 * channels. */
+			hc->rgraph.index = hc->bcast.index;
+		} else {
 			hc->bcast.index = index;
+			hc->rgraph.index = index;
+		}
 		return true;
 	}
 
 	/* If we're loading from store, this means we don't re-add to store. */
-	if (index)
-		hc->bcast.index = index;
-	else {
-		hc->bcast.index
-			= gossip_store_add(rstate->gs, update,
-					   hc->bcast.timestamp,
+	if (index) {
+		if (!spam)
+			hc->bcast.index = index;
+		hc->rgraph.index = index;
+	} else {
+		hc->rgraph.index
+			= gossip_store_add(rstate->gs, update, timestamp,
 					   local_direction(rstate, chan, NULL),
-					   NULL);
+					   spam, NULL);
 		if (hc->bcast.timestamp > rstate->last_timestamp
 		    && hc->bcast.timestamp < time_now().ts.tv_sec)
 			rstate->last_timestamp = hc->bcast.timestamp;
+		if (!spam)
+			hc->bcast.index = hc->rgraph.index;
 
 		peer_supplied_good_gossip(peer, 1);
 	}
@@ -1419,29 +1536,6 @@ static const struct node_id *get_channel_owner(struct routing_state *rstate,
 	return NULL;
 }
 
-void remove_channel_from_store(struct routing_state *rstate,
-			       struct chan *chan)
-{
-	int update_type, announcment_type;
-
-	if (is_chan_public(chan)) {
-		update_type = WIRE_CHANNEL_UPDATE;
-		announcment_type = WIRE_CHANNEL_ANNOUNCEMENT;
-	} else {
-		update_type = WIRE_GOSSIP_STORE_PRIVATE_UPDATE;
-		announcment_type = WIRE_GOSSIP_STORE_PRIVATE_CHANNEL;
-	}
-	gossip_store_mark_channel_deleted(rstate->gs, &chan->scid);
-
-	/* If these aren't in the store, these are noops. */
-	gossip_store_delete(rstate->gs,
-			    &chan->bcast, announcment_type);
-	gossip_store_delete(rstate->gs,
-			    &chan->half[0].bcast, update_type);
-	gossip_store_delete(rstate->gs,
-			    &chan->half[1].bcast, update_type);
-}
-
 u8 *handle_channel_update(struct routing_state *rstate, const u8 *update TAKES,
 			  struct peer *peer,
 			  struct short_channel_id *unknown_scid,
@@ -1454,7 +1548,7 @@ u8 *handle_channel_update(struct routing_state *rstate, const u8 *update TAKES,
 	u32 timestamp;
 	u8 message_flags, channel_flags;
 	u16 expiry;
-	struct amount_msat htlc_minimum;
+	struct amount_msat htlc_minimum, htlc_maximum;
 	u32 fee_base_msat;
 	u32 fee_proportional_millionths;
 	struct bitcoin_blkid chain_hash;
@@ -1468,7 +1562,8 @@ u8 *handle_channel_update(struct routing_state *rstate, const u8 *update TAKES,
 				     &timestamp, &message_flags,
 				     &channel_flags, &expiry,
 				     &htlc_minimum, &fee_base_msat,
-				     &fee_proportional_millionths)) {
+				     &fee_proportional_millionths,
+				     &htlc_maximum)) {
 		warn = towire_warningfmt(rstate, NULL,
 					 "Malformed channel_update %s",
 					 tal_hex(tmpctx, serialized));
@@ -1539,7 +1634,7 @@ u8 *handle_channel_update(struct routing_state *rstate, const u8 *update TAKES,
 		return warn;
 	}
 
-	routing_add_channel_update(rstate, take(serialized), 0, peer, force);
+	routing_add_channel_update(rstate, take(serialized), 0, peer, force, false);
 	return NULL;
 }
 
@@ -1547,7 +1642,8 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 				   const u8 *msg TAKES,
 				   u32 index,
 				   struct peer *peer,
-				   bool *was_unknown)
+				   bool *was_unknown,
+				   bool force_spam_flag)
 {
 	struct node *node;
 	secp256k1_ecdsa_signature signature;
@@ -1557,6 +1653,7 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 	u8 alias[32];
 	u8 *features, *addresses;
 	struct tlv_node_ann_tlvs *na_tlv;
+	bool spam;
 
 	if (was_unknown)
 		*was_unknown = false;
@@ -1616,13 +1713,23 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 		bool only_tlv_diff;
 		u32 redundant_time;
 
-		if (index != 0) {
-			status_broken("gossip_store node_announcement %u replaces %u!",
-				      index, node->bcast.index);
-			return false;
+		/* The gossip_store should contain a single broadcastable entry
+		 * and potentially one rate-limited entry. Any more is a bug */
+		if (index){
+			if (!force_spam_flag){
+				status_broken("gossip_store broadcastable "
+					      "node_announcement %u replaces %u!",
+					      index, node->bcast.index);
+				return false;
+			} else if (node->bcast.index != node->rgraph.index){
+				status_broken("gossip_store rate-limited "
+					      "node_announcement %u replaces %u!",
+					      index, node->rgraph.index);
+				return false;
+			}
 		}
 
-		if (node->bcast.timestamp >= timestamp) {
+		if (node->rgraph.timestamp >= timestamp) {
 			SUPERVERBOSE("Ignoring node announcement, it's outdated.");
 			/* OK unless we're loading from store */
 			return index == 0;
@@ -1646,36 +1753,57 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 		if (!ratelimit(rstate,
 			       &node->tokens, node->bcast.timestamp, timestamp)) {
 			status_peer_debug(peer ? &peer->id : NULL,
-					  "Ignoring spammy nannounce for %s"
+					  "Spammy nannounce for %s flagged"
 					  " (last %u, now %u)",
 					  type_to_string(tmpctx,
 							 struct node_id,
 							 &node_id),
 					  node->bcast.timestamp, timestamp);
-			/* Ignoring != failing */
-			return true;
+			spam = true;
+		} else {
+			spam = false;
 		}
+	} else {
+		spam = false;
+	}
+	if (force_spam_flag)
+		spam = true;
+
+	/* Routing graph always references the latest message. */
+	node->rgraph.timestamp = timestamp;
+	if (!spam) {
+		node->bcast.timestamp = timestamp;
+		/* remove prior spam update if one exists */
+		if (node->rgraph.index != node->bcast.index) {
+			gossip_store_delete(rstate->gs, &node->rgraph,
+					    WIRE_NODE_ANNOUNCEMENT);
+		}
+		/* Harmless if it was never added */
+		gossip_store_delete(rstate->gs, &node->bcast,
+				    WIRE_NODE_ANNOUNCEMENT);
+	/* Remove prior spam update. */
+	} else if (node->rgraph.index != node->bcast.index) {
+		gossip_store_delete(rstate->gs, &node->rgraph,
+				    WIRE_NODE_ANNOUNCEMENT);
 	}
 
-	/* Harmless if it was never added */
-	gossip_store_delete(rstate->gs,
-			    &node->bcast,
-			    WIRE_NODE_ANNOUNCEMENT);
-
-	node->bcast.timestamp = timestamp;
-	if (node->bcast.timestamp > rstate->last_timestamp
-	    && node->bcast.timestamp < time_now().ts.tv_sec)
-		rstate->last_timestamp = node->bcast.timestamp;
-
-	if (index)
-		node->bcast.index = index;
-	else {
-		node->bcast.index
-			= gossip_store_add(rstate->gs, msg,
-					   node->bcast.timestamp,
+	/* Don't add to the store if it was loaded from the store. */
+	if (index) {
+		node->rgraph.index = index;
+		if (!spam)
+			node->bcast.index = index;
+	} else {
+		node->rgraph.index
+			= gossip_store_add(rstate->gs, msg, timestamp,
 					   node_id_eq(&node_id,
 						      &rstate->local_id),
-					   NULL);
+					   spam, NULL);
+		if (node->bcast.timestamp > rstate->last_timestamp
+		    && node->bcast.timestamp < time_now().ts.tv_sec)
+			rstate->last_timestamp = node->bcast.timestamp;
+		if (!spam)
+			node->bcast.index = node->rgraph.index;
+
 		peer_supplied_good_gossip(peer, 1);
 	}
 
@@ -1769,7 +1897,7 @@ u8 *handle_node_announcement(struct routing_state *rstate, const u8 *node_ann,
 	}
 
 	/* May still fail, if we don't know the node. */
-	routing_add_node_announcement(rstate, serialized, 0, peer, was_unknown);
+	routing_add_node_announcement(rstate, serialized, 0, peer, was_unknown, false);
 	return NULL;
 }
 
@@ -1790,8 +1918,8 @@ void route_prune(struct routing_state *rstate)
 			continue;
 
 		/* BOLT #7:
-		 *   - if a channel's oldest `channel_update`s `timestamp` is
-		 *     older than two weeks (1209600 seconds):
+		 * - if the `timestamp` of the latest `channel_update` in
+		 *   either direction is older than two weeks (1209600 seconds):
 		 *    - MAY prune the channel.
 		 */
 		/* This is a fancy way of saying "both ends must refresh!" */
@@ -1895,7 +2023,7 @@ bool routing_add_private_channel(struct routing_state *rstate,
 		u8 *msg = towire_gossip_store_private_channel(tmpctx,
 							      capacity,
 							      chan_ann);
-		index = gossip_store_add(rstate->gs, msg, 0, false, NULL);
+		index = gossip_store_add(rstate->gs, msg, 0, false, false, NULL);
 	}
 	chan->bcast.index = index;
 	return true;
@@ -1970,3 +2098,84 @@ void remove_all_gossip(struct routing_state *rstate)
 	/* Freeing unupdated chanmaps should empty this */
 	assert(pending_node_map_first(rstate->pending_node_map, &pnait) == NULL);
 }
+
+static void channel_spent(struct routing_state *rstate,
+			  struct chan *chan STEALS)
+{
+	status_debug("Deleting channel %s due to the funding outpoint being "
+		     "spent",
+		     type_to_string(tmpctx, struct short_channel_id,
+				    &chan->scid));
+	/* Suppress any now-obsolete updates/announcements */
+	add_to_txout_failures(rstate, &chan->scid);
+	remove_channel_from_store(rstate, chan);
+	/* Freeing is sufficient since everything else is allocated off
+	 * of the channel and this takes care of unregistering
+	 * the channel */
+	free_chan(rstate, chan);
+}
+
+void routing_expire_channels(struct routing_state *rstate, u32 blockheight)
+{
+	struct chan *chan;
+
+	for (size_t i = 0; i < tal_count(rstate->dying_channels); i++) {
+		struct dying_channel *d = rstate->dying_channels + i;
+
+		if (blockheight < d->deadline_blockheight)
+			continue;
+		chan = get_channel(rstate, &d->scid);
+		if (chan)
+			channel_spent(rstate, chan);
+		/* Delete dying marker itself */
+		gossip_store_delete(rstate->gs,
+				    &d->marker, WIRE_GOSSIP_STORE_CHAN_DYING);
+		tal_arr_remove(&rstate->dying_channels, i);
+		i--;
+	}
+}
+
+void remember_chan_dying(struct routing_state *rstate,
+			 const struct short_channel_id *scid,
+			 u32 deadline_blockheight,
+			 u64 index)
+{
+	struct dying_channel d;
+	d.scid = *scid;
+	d.deadline_blockheight = deadline_blockheight;
+	d.marker.index = index;
+	tal_arr_expand(&rstate->dying_channels, d);
+}
+
+void routing_channel_spent(struct routing_state *rstate,
+			   u32 current_blockheight,
+			   struct chan *chan)
+{
+	u64 index;
+	u32 deadline;
+	u8 *msg;
+
+	/* FIXME: We should note that delay is not necessary (or even
+	 * sensible) for local channels! */
+	if (local_direction(rstate, chan, NULL)) {
+		channel_spent(rstate, chan);
+		return;
+	}
+
+	/* BOLT #7:
+	 * - once its funding output has been spent OR reorganized out:
+	 *   - SHOULD forget a channel after a 12-block delay.
+	 */
+	deadline = current_blockheight + 12;
+
+	/* Save to gossip_store in case we restart */
+	msg = towire_gossip_store_chan_dying(tmpctx, &chan->scid, deadline);
+	index = gossip_store_add(rstate->gs, msg, 0, false, false, NULL);
+
+	/* Remember locally so we can kill it in 12 blocks */
+	status_debug("channel %s closing soon due"
+		     " to the funding outpoint being spent",
+		     type_to_string(msg, struct short_channel_id, &chan->scid));
+	remember_chan_dying(rstate, &chan->scid, deadline, index);
+}
+

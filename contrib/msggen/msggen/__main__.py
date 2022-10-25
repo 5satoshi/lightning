@@ -1,5 +1,7 @@
 import json
+import os
 from msggen.gen.grpc import GrpcGenerator, GrpcConverterGenerator, GrpcUnconverterGenerator, GrpcServerGenerator
+from msggen.gen.grpc2py import Grpc2PyGenerator
 from msggen.gen.rust import RustGenerator
 from msggen.gen.generator import GeneratorChain
 from msggen.utils import repo_root, load_jsonrpc_service
@@ -22,6 +24,12 @@ def add_handler_gen_grpc(generator_chain: GeneratorChain, meta):
     generator_chain.add_generator(GrpcServerGenerator(dest))
 
 
+def add_handler_get_grpc2py(generator_chain: GeneratorChain):
+    fname = repo_root() / "contrib" / "pyln-testing" / "pyln" / "testing" / "grpc2py.py"
+    dest = open(fname, "w")
+    generator_chain.add_generator(Grpc2PyGenerator(dest))
+
+
 def add_handler_gen_rust_jsonrpc(generator_chain: GeneratorChain):
     fname = repo_root() / "cln-rpc" / "src" / "model.rs"
     dest = open(fname, "w")
@@ -34,8 +42,10 @@ def load_msggen_meta():
 
 
 def write_msggen_meta(meta):
-    with open('.msggen.json', 'w') as f:
+    pid = os.getpid()
+    with open(f'.msggen.json.tmp.{pid}', 'w') as f:
         json.dump(meta, f, sort_keys=True, indent=4)
+    os.rename(f'.msggen.json.tmp.{pid}', '.msggen.json')
 
 
 def run():
@@ -45,6 +55,7 @@ def run():
 
     add_handler_gen_grpc(generator_chain, meta)
     add_handler_gen_rust_jsonrpc(generator_chain)
+    add_handler_get_grpc2py(generator_chain)
 
     generator_chain.generate(service)
 

@@ -90,12 +90,21 @@ struct wally_psbt *new_psbt(const tal_t *ctx, const struct wally_tx *wtx)
 								     wtx->inputs[i].script,
 								     wtx->inputs[i].script_len);
 			assert(wally_err == WALLY_OK);
+
+			/* Clear out script sig data */
+			psbt->tx->inputs[i].script_len = 0;
+			tal_free(psbt->tx->inputs[i].script);
+			psbt->tx->inputs[i].script = NULL;
 		}
 		if (wtx->inputs[i].witness) {
 			wally_err =
 				wally_psbt_input_set_final_witness(&psbt->inputs[i],
 								   wtx->inputs[i].witness);
 			assert(wally_err == WALLY_OK);
+
+			/* Delete the witness data */
+			wally_tx_witness_stack_free(psbt->tx->inputs[i].witness);
+			psbt->tx->inputs[i].witness = NULL;
 		}
 	}
 
@@ -268,18 +277,20 @@ bool psbt_input_set_signature(struct wally_psbt *psbt, size_t in,
 			      const struct bitcoin_signature *sig)
 {
 	u8 pk_der[PUBKEY_CMPR_LEN];
+	u8 sig_der[73];
+	size_t sig_len;
 	bool ok;
 
 	assert(in < psbt->num_inputs);
 
 	/* we serialize the compressed version of the key, wally likes this */
 	pubkey_to_der(pk_der, pubkey);
+	sig_len = signature_to_der(sig_der, sig);
 	tal_wally_start();
 	wally_psbt_input_set_sighash(&psbt->inputs[in], sig->sighash_type);
 	ok = wally_psbt_input_add_signature(&psbt->inputs[in],
 					    pk_der, sizeof(pk_der),
-					    sig->s.data,
-					    sizeof(sig->s.data)) == WALLY_OK;
+					    sig_der, sig_len) == WALLY_OK;
 	tal_wally_end(psbt);
 	return ok;
 }
@@ -616,11 +627,11 @@ bool psbt_finalize(struct wally_psbt *psbt)
 		/* BOLT #3:
 		 * #### `to_remote` Output
 		 *
-		 * If `option_anchor_outputs` applies to the commitment
+		 * If `option_anchors` applies to the commitment
 		 * transaction, the `to_remote` output is encumbered by a one
 		 * block csv lock.
 		 *
-		 *    <remote_pubkey> OP_CHECKSIGVERIFY 1 OP_CHECKSEQUENCEVERIFY
+		 *    <remotepubkey> OP_CHECKSIGVERIFY 1 OP_CHECKSEQUENCEVERIFY
 		 *
 		 * The output is spent by an input with `nSequence`
 		 * field set to `1` and witness:

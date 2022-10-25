@@ -158,13 +158,14 @@ static inline const char* forward_status_name(enum forward_status status)
 	abort();
 }
 
-bool string_to_forward_status(const char *status_str, enum forward_status *status);
+bool string_to_forward_status(const char *status_str, size_t len,
+			      enum forward_status *status);
 
 /* /!\ This is a DB ENUM, please do not change the numbering of any
  * already defined elements (adding is ok) /!\ */
 enum forward_style {
-	FORWARD_STYLE_LEGACY = ONION_V0_PAYLOAD,
-	FORWARD_STYLE_TLV = ONION_TLV_PAYLOAD,
+	FORWARD_STYLE_LEGACY = 0,
+	FORWARD_STYLE_TLV = 1,
 	FORWARD_STYLE_UNKNOWN = 2, /* Not actually in db, safe to renumber! */
 };
 
@@ -271,9 +272,11 @@ static inline enum htlc_state htlc_state_in_db(enum htlc_state s)
 }
 
 struct forwarding {
+	/* channel_out is all-zero if unknown. */
 	struct short_channel_id channel_in, channel_out;
+	/* htlc_id_out is NULL if unknown. */
+	u64 htlc_id_in, *htlc_id_out;
 	struct amount_msat msat_in, msat_out, fee;
-	struct sha256 *payment_hash;
 	enum forward_style forward_style;
 	enum forward_status status;
 	enum onion_wire failcode;
@@ -333,6 +336,7 @@ struct wallet_payment {
 	struct list_node list;
 	u64 id;
 	u32 timestamp;
+	u32 *completed_at;
 
 	/* The combination of these three fields is unique: */
 	struct sha256 payment_hash;
@@ -1085,12 +1089,16 @@ void wallet_payment_store(struct wallet *wallet,
 			  struct wallet_payment *payment TAKES);
 
 /**
- * wallet_payment_delete_by_hash - Remove a payment
+ * wallet_payment_delete - Remove a payment
  *
- * Removes the payment from the database by hash; if it is a MPP payment
- * it remove all parts with a single query.
+ * Removes the payment from the database by hash; groupid and partid
+ * may both be NULL to delete all entries, otherwise deletes only that
+ * group/partid.
  */
-void wallet_payment_delete_by_hash(struct wallet *wallet, const struct sha256 *payment_hash);
+void wallet_payment_delete(struct wallet *wallet,
+			   const struct sha256 *payment_hash,
+			   const u64 *groupid,
+			   const u64 *partid);
 
 /**
  * wallet_local_htlc_out_delete - Remove a local outgoing failed HTLC
@@ -1181,8 +1189,9 @@ void wallet_payment_set_failinfo(struct wallet *wallet,
  */
 const struct wallet_payment **wallet_payment_list(const tal_t *ctx,
 						  struct wallet *wallet,
-						  const struct sha256 *payment_hash,
-						  enum wallet_payment_status *status);
+						  const struct sha256 *payment_hash)
+	NON_NULL_ARGS(2);
+
 
 /**
  * wallet_payments_by_offer - Retrieve a list of payments for this local_offer_id
@@ -1198,13 +1207,15 @@ void wallet_htlc_sigs_save(struct wallet *w, u64 channel_id,
 			   const struct bitcoin_signature *htlc_sigs);
 
 /**
- * wallet_network_check - Check that the wallet is setup for this chain
+ * wallet_sanity_check - Check that the wallet is setup for this node_id and chain
  *
  * Ensure that the genesis_hash from the chainparams matches the
- * genesis_hash with which the DB was initialized. Returns false if
- * the check failed, i.e., if the genesis hashes do not match.
+ * genesis_hash with which the DB was initialized, and that the HSM
+ * gave us the same node_id as the one is the db.
+ *
+ * Returns false if the checks failed.
  */
-bool wallet_network_check(struct wallet *w);
+bool wallet_sanity_check(struct wallet *w);
 
 /**
  * wallet_block_add - Add a block to the blockchain tracked by this wallet
@@ -1372,6 +1383,15 @@ const struct forwarding *wallet_forwarded_payments_get(struct wallet *w,
 						       const struct short_channel_id *chan_in,
 						       const struct short_channel_id *chan_out,
 						       const timeabs *epoch);
+
+/**
+ * Delete a particular forward entry
+ * Returns false if not found
+ */
+bool wallet_forward_delete(struct wallet *w,
+			   const struct short_channel_id *chan_in,
+			   const u64 *htlc_id,
+			   enum forward_status state);
 
 /**
  * Load remote_ann_node_sig and remote_ann_bitcoin_sig
@@ -1626,4 +1646,40 @@ struct db_stmt *wallet_datastore_next(const tal_t *ctx,
 				      const u8 **data,
 				      u64 *generation);
 
+/**
+ * Iterate through the htlcs table.
+ * @w: the wallet
+ * @chan: optional channel to filter by
+ *
+ * Returns pointer to hand as @iter to wallet_htlcs_next(), or NULL.
+ * If you choose not to call wallet_htlcs_next() you must free it!
+ */
+struct wallet_htlc_iter *wallet_htlcs_first(const tal_t *ctx,
+					    struct wallet *w,
+					    const struct channel *chan,
+					    struct short_channel_id *scid,
+					    u64 *htlc_id,
+					    int *cltv_expiry,
+					    enum side *owner,
+					    struct amount_msat *msat,
+					    struct sha256 *payment_hash,
+					    enum htlc_state *hstate);
+
+/**
+ * Iterate through the htlcs table.
+ * @w: the wallet
+ * @iter: the previous iter.
+ *
+ * Returns pointer to hand as @iter to wallet_htlcs_next(), or NULL.
+ * If you choose not to call wallet_htlcs_next() you must free it!
+ */
+struct wallet_htlc_iter *wallet_htlcs_next(struct wallet *w,
+					   struct wallet_htlc_iter *iter,
+					   struct short_channel_id *scid,
+					   u64 *htlc_id,
+					   int *cltv_expiry,
+					   enum side *owner,
+					   struct amount_msat *msat,
+					   struct sha256 *payment_hash,
+					   enum htlc_state *hstate);
 #endif /* LIGHTNING_WALLET_WALLET_H */

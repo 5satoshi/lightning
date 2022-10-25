@@ -3,12 +3,12 @@
 #include "config.h"
 #include <common/channel_id.h>
 #include <common/channel_type.h>
+#include <common/scb_wiregen.h>
 #include <common/tx_roles.h>
 #include <common/utils.h>
 #include <lightningd/channel_state.h>
 #include <wallet/wallet.h>
 
-struct channel_id;
 struct uncommitted_channel;
 struct wally_psbt;
 
@@ -119,6 +119,12 @@ struct channel {
 	/* Minimum funding depth (specified by us if they fund). */
 	u32 minimum_depth;
 
+	/* Depth of the funding TX as reported by the txout
+	 * watch. Only used while we're in state
+	 * CHANNELD_AWAITING_LOCKING, afterwards the watches do not
+	 * trigger anymore. */
+	u32 depth;
+
 	/* Tracking commitment transaction numbers. */
 	u64 next_index[NUM_SIDES];
 	u64 next_htlc_id;
@@ -131,9 +137,15 @@ struct channel {
 	struct amount_sat our_funds;
 
 	struct amount_msat push;
-	bool remote_funding_locked;
+	bool remote_channel_ready;
 	/* Channel if locked locally. */
 	struct short_channel_id *scid;
+
+	/* Alias used for option_zeroconf, or option_scid_alias, if
+	 * present. LOCAL are all the alias we told the peer about and
+	 * REMOTE is one of the aliases we got from the peer and we'll
+	 * use in a routehint. */
+	struct short_channel_id *alias[NUM_SIDES];
 
 	struct channel_id cid;
 
@@ -192,9 +204,6 @@ struct channel {
 	/* Feerate range */
 	u32 min_possible_feerate, max_possible_feerate;
 
-	/* Does gossipd need to know if the owner dies? (ie. not onchaind) */
-	bool connected;
-
 	/* Do we have an "impossible" future per_commitment_point from
 	 * peer via option_data_loss_protect? */
 	const struct pubkey *future_per_commitment_point;
@@ -248,7 +257,13 @@ struct channel {
 
 	/* Latest channel_update, for use in error messages. */
 	u8 *channel_update;
+
+	/* `Channel-shell` of this channel
+	 * (Minimum information required to backup this channel). */
+	struct scb_chan *scb;
 };
+
+bool channel_is_connected(const struct channel *channel);
 
 /* For v2 opens, a channel that has not yet been committed/saved to disk */
 struct channel *new_unsaved_channel(struct peer *peer,
@@ -275,9 +290,11 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    struct amount_sat funding_sats,
 			    struct amount_msat push,
 			    struct amount_sat our_funds,
-			    bool remote_funding_locked,
+			    bool remote_channel_ready,
 			    /* NULL or stolen */
 			    struct short_channel_id *scid STEALS,
+			    struct short_channel_id *alias_local STEALS,
+			    struct short_channel_id *alias_remote STEALS,
 			    struct channel_id *cid,
 			    struct amount_msat our_msatoshi,
 			    struct amount_msat msatoshi_to_us_min,
@@ -298,7 +315,6 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    u32 first_blocknum,
 			    u32 min_possible_feerate,
 			    u32 max_possible_feerate,
-			    bool connected,
 			    const struct basepoints *local_basepoints,
 			    const struct pubkey *local_funding_pubkey,
 			    const struct pubkey *future_per_commitment_point,
@@ -357,11 +373,11 @@ const char *channel_state_str(enum channel_state state);
 void channel_set_owner(struct channel *channel, struct subd *owner);
 
 /* Channel has failed, but can try again. */
-void channel_fail_reconnect(struct channel *channel,
+void channel_fail_transient(struct channel *channel,
 			    const char *fmt, ...) PRINTF_FMT(2,3);
 /* Channel has failed, but can try again after a minute. */
-void channel_fail_reconnect_later(struct channel *channel,
-				  const char *fmt,...) PRINTF_FMT(2,3);
+void channel_fail_transient_delayreconnect(struct channel *channel,
+					   const char *fmt,...) PRINTF_FMT(2,3);
 
 /* Channel has failed, give up on it. */
 void channel_fail_permanent(struct channel *channel,
@@ -394,8 +410,11 @@ struct channel *peer_any_unsaved_channel(struct peer *peer, bool *others);
 
 struct channel *channel_by_dbid(struct lightningd *ld, const u64 dbid);
 
+/* Includes both real scids and aliases.  If !privacy_leak_ok, then private
+ * channels' real scids are not included. */
 struct channel *any_channel_by_scid(struct lightningd *ld,
-				    const struct short_channel_id *scid);
+				    const struct short_channel_id *scid,
+				    bool privacy_leak_ok);
 
 /* Get channel by channel_id */
 struct channel *channel_by_cid(struct lightningd *ld,
@@ -408,6 +427,11 @@ struct channel *find_channel_by_id(const struct peer *peer,
 /* Find this channel within peer */
 struct channel *find_channel_by_scid(const struct peer *peer,
 				     const struct short_channel_id *scid);
+
+/* Find a channel by its alias, either local or remote. */
+struct channel *find_channel_by_alias(const struct peer *peer,
+				      const struct short_channel_id *alias,
+				      enum side side);
 
 void channel_set_last_tx(struct channel *channel,
 			 struct bitcoin_tx *tx,
@@ -441,10 +465,18 @@ static inline bool channel_unsaved(const struct channel *channel)
 		&& channel->dbid == 0;
 }
 
+static inline bool channel_pre_open(const struct channel *channel)
+{
+	return channel->state == CHANNELD_AWAITING_LOCKIN
+		|| channel->state == DUALOPEND_OPEN_INIT
+		|| channel->state == DUALOPEND_AWAITING_LOCKIN;
+}
+
 static inline bool channel_active(const struct channel *channel)
 {
 	return channel->state != FUNDING_SPEND_SEEN
 		&& channel->state != CLOSINGD_COMPLETE
+		&& channel->state != AWAITING_UNILATERAL
 		&& !channel_unsaved(channel)
 		&& !channel_on_chain(channel);
 }
@@ -462,6 +494,16 @@ static inline bool channel_has(const struct channel *channel, int f)
 {
 	return channel_type_has(channel->type, f);
 }
+
+/**
+ * Either returns the short_channel_id if it is known or the local alias.
+ *
+ * This is used to refer to a channel by its scid. But sometimes we
+ * don't have a scid yet, e.g., for `zeroconf` channels, so we resort
+ * to referencing it by the local alias, which we have in that case.
+ */
+const struct short_channel_id *
+channel_scid_or_local_alias(const struct channel *chan);
 
 void get_channel_basepoints(struct lightningd *ld,
 			    const struct node_id *peer_id,

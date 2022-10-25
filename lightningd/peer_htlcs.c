@@ -6,11 +6,9 @@
 #include <common/configdir.h>
 #include <common/ecdh.h>
 #include <common/json_command.h>
-#include <common/json_helpers.h>
-#include <common/json_tok.h>
+#include <common/json_param.h>
 #include <common/onion.h>
 #include <common/onionreply.h>
-#include <common/param.h>
 #include <common/timeout.h>
 #include <common/type_to_string.h>
 #include <db/exec.h>
@@ -487,21 +485,6 @@ static void destroy_hout_subd_died(struct htlc_out *hout)
 		db_commit_transaction(db);
 }
 
-static enum forward_style get_onion_style(const struct htlc_in *hin)
-{
-	/* This happens on reload from db; don't try too hard! */
-	if (!hin->payload)
-		return FORWARD_STYLE_UNKNOWN;
-
-	switch (hin->payload->type) {
-	case ONION_V0_PAYLOAD:
-		return FORWARD_STYLE_LEGACY;
-	case ONION_TLV_PAYLOAD:
-		return FORWARD_STYLE_TLV;
-	}
-	abort();
-}
-
 /* This is where channeld gives us the HTLC id, and also reports if it
  * failed immediately. */
 static void rcvd_htlc_reply(struct subd *subd, const u8 *msg, const int *fds UNUSED,
@@ -538,11 +521,11 @@ static void rcvd_htlc_reply(struct subd *subd, const u8 *msg, const int *fds UNU
 			fail_in_htlc(hout->in, failonion);
 
 			/* here we haven't called connect_htlc_out(),
-			 * so set htlc field with NULL */
+			 * so set htlc field with NULL (db wants it to exist!) */
 			wallet_forwarded_payment_add(ld->wallet,
 					 hout->in,
-					 get_onion_style(hout->in),
-					 NULL, NULL,
+					 FORWARD_STYLE_TLV,
+					 channel_scid_or_local_alias(hout->key.channel), NULL,
 					 FORWARD_LOCAL_FAILED,
 						     fromwire_peektype(hout->failmsg));
 		}
@@ -650,11 +633,51 @@ const u8 *send_htlc_out(const tal_t *ctx,
 	return NULL;
 }
 
+/* What's the best channel to this peer?
+ * If @hint is set, channel must match that one. */
+static struct channel *best_channel(struct lightningd *ld,
+				    const struct peer *next_peer,
+				    struct amount_msat amt_to_forward,
+				    struct channel *hint)
+{
+	struct amount_msat best_spendable = AMOUNT_MSAT(0);
+	struct channel *channel, *best = hint;
+
+	/* Seek channel with largest spendable! */
+	list_for_each(&next_peer->channels, channel, list) {
+		struct amount_msat spendable;
+		if (!channel_can_add_htlc(channel))
+			continue;
+		spendable = channel_amount_spendable(channel);
+		if (!amount_msat_greater(spendable, best_spendable))
+			continue;
+
+		/* Don't override if fees differ... */
+		if (hint) {
+			if (hint->feerate_base != channel->feerate_base
+			    || hint->feerate_ppm != channel->feerate_ppm)
+				continue;
+		}
+
+		/* Or if this would be below min for channel! */
+		if (amount_msat_less(amt_to_forward,
+				     channel->channel_info.their_config.htlc_minimum))
+			continue;
+
+		best = channel;
+		best_spendable = spendable;
+	}
+	return best;
+}
+
+/* forward_to is where we're actually sending it (or NULL), and
+ * forward_scid is where they asked to send it (or NULL). */
 static void forward_htlc(struct htlc_in *hin,
 			 u32 cltv_expiry,
 			 struct amount_msat amt_to_forward,
 			 u32 outgoing_cltv_value,
-			 const struct short_channel_id *scid,
+			 const struct short_channel_id *forward_scid,
+			 const struct channel_id *forward_to,
 			 const u8 next_onion[TOTAL_PACKET_SIZE(ROUTING_INFO_SIZE)],
 			 const struct pubkey *next_blinding)
 {
@@ -663,46 +686,20 @@ static void forward_htlc(struct htlc_in *hin,
 	struct channel *next;
 	struct htlc_out *hout = NULL;
 
-	/* This is a shortcut for specifying next peer; doesn't mean
-	 * the actual channel! */
-	next = any_channel_by_scid(ld, scid);
-	if (next) {
-		struct peer *peer = next->peer;
-		struct channel *channel;
-		struct amount_msat best_spendable = channel_amount_spendable(next);
-
-		/* Seek channel with largest spendable! */
-		list_for_each(&peer->channels, channel, list) {
-			struct amount_msat spendable;
-			if (!channel_can_add_htlc(channel))
-				continue;
-			spendable = channel_amount_spendable(channel);
-			if (!amount_msat_greater(spendable, best_spendable))
-				continue;
-
-			/* Don't override if fees differ... */
-			if (channel->feerate_base != next->feerate_base
-			    || channel->feerate_ppm != next->feerate_ppm)
-				continue;
-			/* Or if this would be below min for channel! */
-			if (amount_msat_less(amt_to_forward,
-					     channel->channel_info.their_config.htlc_minimum))
-				continue;
-
-			/* OK, it's better! */
-			log_debug(next->log, "Chose a better channel: %s",
-				  type_to_string(tmpctx, struct short_channel_id,
-						 channel->scid));
-			next = channel;
-		}
-	}
+	if (forward_to) {
+		next = channel_by_cid(ld, forward_to);
+		/* Update this to where we're actually trying to send. */
+		if (next)
+			forward_scid = channel_scid_or_local_alias(next);
+	}else
+		next = NULL;
 
 	/* Unknown peer, or peer not ready. */
 	if (!next || !channel_active(next)) {
 		local_fail_in_htlc(hin, take(towire_unknown_next_peer(NULL)));
 		wallet_forwarded_payment_add(hin->key.channel->peer->ld->wallet,
-					 hin, get_onion_style(hin),
-					 next ? next->scid : NULL, NULL,
+					 hin, FORWARD_STYLE_TLV,
+					 forward_scid, NULL,
 					 FORWARD_LOCAL_FAILED,
 					 WIRE_UNKNOWN_NEXT_PEER);
 		return;
@@ -717,7 +714,10 @@ static void forward_htlc(struct htlc_in *hin,
 	if (!check_fwd_amount(hin, amt_to_forward, hin->msat,
 			      next->feerate_base,
 			      next->feerate_ppm)) {
-		/* Are we in old-fee grace-period? */
+		/* BOLT #7:
+		 * - If it creates a new `channel_update` with updated channel parameters:
+		 *    - SHOULD keep accepting the previous channel parameters for 10 minutes
+		 */
 		if (!time_before(time_now(), next->old_feerate_timeout)
 		    || !check_fwd_amount(hin, amt_to_forward, hin->msat,
 					 next->old_feerate_base,
@@ -797,7 +797,7 @@ static void forward_htlc(struct htlc_in *hin,
 fail:
 	local_fail_in_htlc(hin, failmsg);
 	wallet_forwarded_payment_add(ld->wallet,
-				 hin, get_onion_style(hin), next->scid, hout,
+				 hin, FORWARD_STYLE_TLV, forward_scid, hout,
 				 FORWARD_LOCAL_FAILED,
 				 fromwire_peektype(failmsg));
 }
@@ -813,6 +813,8 @@ struct htlc_accepted_hook_payload {
 	struct channel *channel;
 	struct lightningd *ld;
 	struct pubkey *next_blinding;
+	/* NULL if we couldn't find it */
+	struct channel_id *fwd_channel_id;
 	u8 *next_onion;
 	u64 failtlvtype;
 	size_t failtlvpos;
@@ -901,7 +903,7 @@ static bool htlc_accepted_hook_deserialize(struct htlc_accepted_hook_payload *re
 	struct htlc_in *hin = request->hin;
 	struct lightningd *ld = request->ld;
 	struct preimage payment_preimage;
-	const jsmntok_t *resulttok, *paykeytok, *payloadtok;
+	const jsmntok_t *resulttok, *paykeytok, *payloadtok, *fwdtok;
 	u8 *payload, *failonion;
 
 	if (!toks || !buffer)
@@ -933,9 +935,21 @@ static bool htlc_accepted_hook_deserialize(struct htlc_accepted_hook_payload *re
 						ld->accept_extra_tlv_types,
 						&request->failtlvtype,
 						&request->failtlvpos);
-
 	} else
 		payload = NULL;
+
+	fwdtok = json_get_member(buffer, toks, "forward_to");
+	if (fwdtok) {
+		tal_free(request->fwd_channel_id);
+		request->fwd_channel_id = tal(request, struct channel_id);
+		if (!json_to_channel_id(buffer, fwdtok,
+					request->fwd_channel_id)) {
+			fatal("Bad forward_to for htlc_accepted"
+			      " hook: %.*s",
+			      fwdtok->end - fwdtok->start,
+			      buffer + fwdtok->start);
+		}
+	}
 
 	if (json_tok_streq(buffer, resulttok, "continue")) {
 		return true;
@@ -1031,20 +1045,16 @@ static void htlc_accepted_hook_serialize(struct htlc_accepted_hook_payload *p,
 
 	json_add_hex_talarr(s, "payload", rs->raw_payload);
 	if (p->payload) {
-		switch (p->payload->type) {
-		case ONION_V0_PAYLOAD:
-			json_add_string(s, "type", "legacy");
-			break;
-
-		case ONION_TLV_PAYLOAD:
-			json_add_string(s, "type", "tlv");
-			break;
-		}
+		json_add_string(s, "type", "tlv");
 
 		if (p->payload->forward_channel)
 			json_add_short_channel_id(s, "short_channel_id",
 						  p->payload->forward_channel);
-		json_add_amount_msat_only(s, "forward_amount",
+		if (deprecated_apis)
+			json_add_string(s, "forward_amount",
+					fmt_amount_msat(tmpctx,
+							p->payload->amt_to_forward));
+		json_add_amount_msat_only(s, "forward_msat",
 					  p->payload->amt_to_forward);
 		json_add_u32(s, "outgoing_cltv_value", p->payload->outgoing_cltv);
 		/* These are specified together in TLV, so only print total_msat
@@ -1064,8 +1074,17 @@ static void htlc_accepted_hook_serialize(struct htlc_accepted_hook_payload *p,
 	json_add_secret(s, "shared_secret", hin->shared_secret);
 	json_object_end(s);
 
+	if (p->fwd_channel_id)
+		json_add_channel_id(s, "forward_to", p->fwd_channel_id);
+
 	json_object_start(s, "htlc");
-	json_add_amount_msat_only(s, "amount", hin->msat);
+	json_add_short_channel_id(
+	    s, "short_channel_id",
+	    channel_scid_or_local_alias(hin->key.channel));
+	json_add_u64(s, "id", hin->key.id);
+	if (deprecated_apis)
+		json_add_amount_msat_only(s, "amount", hin->msat);
+	json_add_amount_msat_only(s, "amount_msat", hin->msat);
 	json_add_u32(s, "cltv_expiry", expiry);
 	json_add_s32(s, "cltv_expiry_relative", expiry - blockheight);
 	json_add_sha256(s, "payment_hash", &hin->payment_hash);
@@ -1101,6 +1120,7 @@ htlc_accepted_hook_final(struct htlc_accepted_hook_payload *request STEALS)
 			     request->payload->amt_to_forward,
 			     request->payload->outgoing_cltv,
 			     request->payload->forward_channel,
+			     request->fwd_channel_id,
 			     serialize_onionpacket(tmpctx, rs->next),
 			     request->next_blinding);
 	} else
@@ -1149,6 +1169,37 @@ REGISTER_PLUGIN_HOOK(htlc_accepted,
 		     htlc_accepted_hook_serialize,
 		     struct htlc_accepted_hook_payload *);
 
+
+/* Figures out how to fwd, allocating return off hp */
+static struct channel_id *calc_forwarding_channel(struct lightningd *ld,
+						  struct htlc_accepted_hook_payload *hp,
+						  const struct route_step *rs)
+{
+	const struct onion_payload *p = hp->payload;
+	struct channel *c, *best;
+
+	if (rs->nextcase != ONION_FORWARD)
+		return NULL;
+
+	if (!p || !p->forward_channel)
+		return NULL;
+
+	c = any_channel_by_scid(ld, p->forward_channel, false);
+	if (!c)
+		return NULL;
+
+	best = best_channel(ld, c->peer, p->amt_to_forward, c);
+	if (best != c) {
+		log_debug(hp->channel->log,
+			  "Chose a better channel than %s: %s",
+			  type_to_string(tmpctx, struct short_channel_id,
+					 p->forward_channel),
+			  type_to_string(tmpctx, struct short_channel_id,
+					 channel_scid_or_local_alias(best)));
+	}
+
+	return tal_dup(hp, struct channel_id, &best->cid);
+}
 
 /**
  * Everyone is committed to this htlc of theirs
@@ -1284,7 +1335,17 @@ static bool peer_accepted_htlc(const tal_t *ctx,
 #endif
 		hook_payload->next_blinding = NULL;
 
-	plugin_hook_call_htlc_accepted(ld, hook_payload);
+	/* The scid is merely used to indicate the next peer, it is not
+	 * a requirement (nor, ideally, observable anyway).  We can change
+	 * to a more-preferred one now, that way the hook sees the value
+	 * we're actually going to (try to) use */
+
+	/* We don't store actual channel as it could vanish while
+	 * we're in hook */
+	hook_payload->fwd_channel_id
+		= calc_forwarding_channel(ld, hook_payload, rs);
+
+	plugin_hook_call_htlc_accepted(ld, NULL, hook_payload);
 
 	/* Falling through here is ok, after all the HTLC locked */
 	return true;
@@ -1326,8 +1387,8 @@ static void fulfill_our_htlc_out(struct channel *channel, struct htlc_out *hout,
 	else if (hout->in) {
 		fulfill_htlc(hout->in, preimage);
 		wallet_forwarded_payment_add(ld->wallet, hout->in,
-					     get_onion_style(hout->in),
-					     hout->key.channel->scid, hout,
+					     FORWARD_STYLE_TLV,
+					     channel_scid_or_local_alias(hout->key.channel), hout,
 					     FORWARD_SETTLED, 0);
 	}
 }
@@ -1454,8 +1515,8 @@ static bool peer_failed_our_htlc(struct channel *channel,
 
 	if (hout->in)
 		wallet_forwarded_payment_add(ld->wallet, hout->in,
-					     get_onion_style(hout->in),
-					     channel->scid,
+					     FORWARD_STYLE_TLV,
+					     channel_scid_or_local_alias(channel),
 					     hout, FORWARD_FAILED,
 					     hout->failmsg
 					     ? fromwire_peektype(hout->failmsg)
@@ -1565,6 +1626,18 @@ void onchain_failed_our_htlc(const struct channel *channel,
 		return;
 	}
 
+	/* We can have hout->failonion (which gets set when we process the
+	 * received commitment_signed), but not failed hin yet, because the peer
+	 * hadn't revoke_and_acked our own commitment without that htlc. */
+	if (hout->failonion && hout->in
+	    && hout->in->badonion == 0
+	    && !hout->in->failonion
+	    && !hout->in->preimage) {
+		log_debug(channel->log, "HTLC out %"PRIu64" can now fail HTLC upstream!",
+			  htlc->id);
+		fail_in_htlc(hout->in, hout->failonion);
+	}
+
 	/* Don't fail twice (or if already succeeded)! */
 	if (hout->failonion || hout->failmsg || hout->preimage) {
 		log_debug(channel->log, "HTLC id %"PRIu64" failonion = %p, failmsg = %p, preimage = %p",
@@ -1605,8 +1678,8 @@ void onchain_failed_our_htlc(const struct channel *channel,
 		local_fail_in_htlc(hout->in,
 				   take(towire_permanent_channel_failure(NULL)));
 		wallet_forwarded_payment_add(hout->key.channel->peer->ld->wallet,
-					 hout->in, get_onion_style(hout->in),
-					 channel->scid, hout,
+					 hout->in, FORWARD_STYLE_TLV,
+					 channel_scid_or_local_alias(channel), hout,
 					 FORWARD_LOCAL_FAILED,
 					 hout->failmsg
 					 ? fromwire_peektype(hout->failmsg)
@@ -1772,8 +1845,8 @@ static bool update_out_htlc(struct channel *channel,
 
 		if (hout->in) {
 			wallet_forwarded_payment_add(ld->wallet, hout->in,
-						     get_onion_style(hout->in),
-						     channel->scid, hout,
+						     FORWARD_STYLE_TLV,
+						     channel_scid_or_local_alias(channel), hout,
 						     FORWARD_OFFERED, 0);
 		}
 
@@ -2371,7 +2444,7 @@ void peer_got_revoke(struct channel *channel, const u8 *msg)
 	payload->channel_dbid = channel->dbid;
 	payload->commitnum = pbase->commitment_num;
 	payload->channel_id = channel->cid;
-	plugin_hook_call_commitment_revocation(ld, payload);
+	plugin_hook_call_commitment_revocation(ld, NULL, payload);
 }
 
 
@@ -2737,27 +2810,36 @@ AUTODATA(json_command, &dev_ignore_htlcs);
 
 /* Warp this process to ensure the consistent json object structure
  * between 'listforwards' API and 'forward_event' notification. */
-void json_format_forwarding_object(struct json_stream *response,
-				   const char *fieldname,
-				   const struct forwarding *cur)
+void json_add_forwarding_object(struct json_stream *response,
+				const char *fieldname,
+				const struct forwarding *cur,
+				const struct sha256 *payment_hash)
 {
 	json_object_start(response, fieldname);
 
-	/* See 6d333f16cc0f3aac7097269bf0985b5fa06d59b4: we may have deleted HTLC. */
-	if (cur->payment_hash)
-		json_add_sha256(response, "payment_hash", cur->payment_hash);
+	/* Only for forward_event */
+	if (payment_hash)
+		json_add_sha256(response, "payment_hash", payment_hash);
 	json_add_short_channel_id(response, "in_channel", &cur->channel_in);
 
+#ifdef COMPAT_V0121
+	if (cur->htlc_id_in != HTLC_INVALID_ID)
+#endif
+		json_add_u64(response, "in_htlc_id", cur->htlc_id_in);
+
 	/* This can be unknown if we failed before channel lookup */
-	if (cur->channel_out.u64 != 0)
+	if (cur->channel_out.u64 != 0) {
 		json_add_short_channel_id(response, "out_channel",
 					  &cur->channel_out);
+		if (cur->htlc_id_out)
+			json_add_u64(response, "out_htlc_id", *cur->htlc_id_out);
+	}
 	json_add_amount_msat_compat(response,
 				    cur->msat_in,
 				    "in_msatoshi", "in_msat");
 
 	/* These can be unset (aka zero) if we failed before channel lookup */
-	if (cur->channel_out.u64 != 0) {
+	if (!amount_msat_eq(cur->msat_out, AMOUNT_MSAT(0))) {
 		json_add_amount_msat_compat(response,
 					    cur->msat_out,
 					    "out_msatoshi",  "out_msat");
@@ -2807,11 +2889,27 @@ static void listforwardings_add_forwardings(struct json_stream *response,
 	json_array_start(response, "forwards");
 	for (size_t i=0; i<tal_count(forwardings); i++) {
 		const struct forwarding *cur = &forwardings[i];
-		json_format_forwarding_object(response, NULL, cur);
+		json_add_forwarding_object(response, NULL, cur, NULL);
 	}
 	json_array_end(response);
 
 	tal_free(forwardings);
+}
+
+static struct command_result *param_forward_status(struct command *cmd,
+						   const char *name,
+						   const char *buffer,
+						   const jsmntok_t *tok,
+						   enum forward_status **status)
+{
+	*status = tal(cmd, enum forward_status);
+	if (string_to_forward_status(buffer + tok->start,
+				     tok->end - tok->start,
+				     *status))
+		return NULL;
+
+	return command_fail_badparam(cmd, name, buffer, tok,
+				     "Unrecognized status");
 }
 
 static struct command_result *json_listforwards(struct command *cmd,
@@ -2821,42 +2919,19 @@ static struct command_result *json_listforwards(struct command *cmd,
 {
 
 	struct json_stream *response;
-
-	struct short_channel_id *chan_in;
-	struct short_channel_id *chan_out;
-
-	const char *status_str;
-	enum forward_status status = FORWARD_ANY;
-
-	// TODO: We will remove soon after the deprecated period.
-	if (params && deprecated_apis && params->type == JSMN_ARRAY) {
-		struct short_channel_id scid;
-		/* We need to catch [ null, null, "settled" ], and
-		 * [ "1x2x3" ] as old-style */
-	        if ((params->size > 0 && json_to_short_channel_id(buffer, params + 1, &scid)) ||
-		    (params->size == 3 && !json_to_short_channel_id(buffer, params + 3, &scid))) {
-			if (!param(cmd, buffer, params,
-				   p_opt("in_channel", param_short_channel_id, &chan_in),
-				   p_opt("out_channel", param_short_channel_id, &chan_out),
-				   p_opt("status", param_string, &status_str),
-				   NULL))
-				return command_param_failed();
-			goto parsed;
-		}
-	}
+	struct short_channel_id *chan_in, *chan_out;
+	enum forward_status *status;
 
 	if (!param(cmd, buffer, params,
-		   p_opt("status", param_string, &status_str),
+		   p_opt_def("status", param_forward_status, &status,
+			     FORWARD_ANY),
 		   p_opt("in_channel", param_short_channel_id, &chan_in),
 		   p_opt("out_channel", param_short_channel_id, &chan_out),
 		   NULL))
 		return command_param_failed();
- parsed:
-	if (status_str && !string_to_forward_status(status_str, &status))
-		return command_fail(cmd, JSONRPC2_INVALID_PARAMS, "Unrecognized status: %s", status_str);
 
 	response = json_stream_success(cmd);
-	listforwardings_add_forwardings(response, cmd->ld->wallet, status, chan_in, chan_out);
+	listforwardings_add_forwardings(response, cmd->ld->wallet, *status, chan_in, chan_out);
 
 	return command_success(cmd, response);
 }
@@ -2865,6 +2940,151 @@ static const struct json_command listforwards_command = {
 	"listforwards",
 	"channels",
 	json_listforwards,
-	"List all forwarded payments and their information optionally filtering by [in_channel] [out_channel] and [state]"
+	"List all forwarded payments and their information optionally filtering by [status], [in_channel] and [out_channel]"
 };
 AUTODATA(json_command, &listforwards_command);
+
+static struct command_result *param_forward_delstatus(struct command *cmd,
+						      const char *name,
+						      const char *buffer,
+						      const jsmntok_t *tok,
+						      enum forward_status **status)
+{
+	struct command_result *ret;
+
+	ret = param_forward_status(cmd, name, buffer, tok, status);
+	if (ret)
+		return ret;
+
+	switch (**status) {
+	case FORWARD_OFFERED:
+		return command_fail_badparam(cmd, name, buffer, tok,
+					     "delforward status cannot be offered");
+	case FORWARD_ANY:
+		return command_fail_badparam(cmd, name, buffer, tok,
+					     "delforward status cannot be any");
+	case FORWARD_SETTLED:
+	case FORWARD_FAILED:
+	case FORWARD_LOCAL_FAILED:
+		return NULL;
+	}
+	abort();
+}
+
+static struct command_result *json_delforward(struct command *cmd,
+					      const char *buffer,
+					      const jsmntok_t *obj UNNEEDED,
+					      const jsmntok_t *params)
+{
+	struct short_channel_id *chan_in;
+	u64 *htlc_id;
+	enum forward_status *status;
+
+	if (!param(cmd, buffer, params,
+		   p_req("in_channel", param_short_channel_id, &chan_in),
+		   p_req("in_htlc_id", param_u64, &htlc_id),
+		   p_req("status", param_forward_delstatus, &status),
+		   NULL))
+		return command_param_failed();
+
+#ifdef COMPAT_V0121
+	/* Special value used if in_htlc_id is missing */
+	if (*htlc_id == HTLC_INVALID_ID)
+		htlc_id = NULL;
+#endif
+
+	if (!wallet_forward_delete(cmd->ld->wallet,
+				   chan_in, htlc_id, *status))
+		return command_fail(cmd, DELFORWARD_NOT_FOUND,
+				    "Could not find that forward");
+
+	return command_success(cmd, json_stream_success(cmd));
+}
+
+static const struct json_command delforward_command = {
+	"delforward",
+	"channels",
+	json_delforward,
+	"Delete a forwarded payment by [in_channel], [in_htlc_id] and [status]"
+};
+AUTODATA(json_command, &delforward_command);
+
+static struct command_result *param_channel(struct command *cmd,
+					    const char *name,
+					    const char *buffer,
+					    const jsmntok_t *tok,
+					    struct channel **chan)
+{
+	struct channel_id cid;
+	struct short_channel_id scid;
+
+	if (json_tok_channel_id(buffer, tok, &cid)) {
+		*chan = channel_by_cid(cmd->ld, &cid);
+		if (!*chan)
+			return command_fail_badparam(cmd, name, buffer, tok,
+						     "unknown channel");
+		return NULL;
+	} else if (json_to_short_channel_id(buffer, tok, &scid)) {
+		*chan = any_channel_by_scid(cmd->ld, &scid, true);
+		if (!*chan)
+			return command_fail_badparam(cmd, name, buffer, tok,
+						     "unknown channel");
+		return NULL;
+	}
+	return command_fail_badparam(cmd, name, buffer, tok,
+				     "must be channel id or short channel id");
+}
+
+static struct command_result *json_listhtlcs(struct command *cmd,
+					     const char *buffer,
+					     const jsmntok_t *obj UNNEEDED,
+					     const jsmntok_t *params)
+{
+	struct json_stream *response;
+	struct channel *chan;
+	struct wallet_htlc_iter *i;
+	struct short_channel_id scid;
+	u64 htlc_id;
+	int cltv_expiry;
+	enum side owner;
+	struct amount_msat msat;
+	struct sha256 payment_hash;
+	enum htlc_state hstate;
+
+	if (!param(cmd, buffer, params,
+		   p_opt("id", param_channel, &chan),
+		   NULL))
+		return command_param_failed();
+
+	response = json_stream_success(cmd);
+	json_array_start(response, "htlcs");
+	for (i = wallet_htlcs_first(cmd, cmd->ld->wallet, chan,
+				    &scid, &htlc_id, &cltv_expiry, &owner, &msat,
+				    &payment_hash, &hstate);
+	     i;
+	     i = wallet_htlcs_next(cmd->ld->wallet, i,
+				   &scid, &htlc_id, &cltv_expiry, &owner, &msat,
+				   &payment_hash, &hstate)) {
+		json_object_start(response, NULL);
+		json_add_short_channel_id(response, "short_channel_id", &scid);
+		json_add_u64(response, "id", htlc_id);
+		json_add_u32(response, "expiry", cltv_expiry);
+		json_add_string(response, "direction",
+				owner == LOCAL ? "out": "in");
+		json_add_amount_msat_only(response, "amount_msat", msat);
+		json_add_sha256(response, "payment_hash", &payment_hash);
+		json_add_string(response, "state", htlc_state_name(hstate));
+		json_object_end(response);
+	}
+	json_array_end(response);
+
+	return command_success(cmd, response);
+}
+
+static const struct json_command listhtlcs_command = {
+	"listhtlcs",
+	"channels",
+	json_listhtlcs,
+	"List all known HTLCS (optionally, just for [id] (scid or channel id))"
+};
+AUTODATA(json_command, &listhtlcs_command);

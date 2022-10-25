@@ -3,6 +3,7 @@
 #include "config.h"
 #include <bitcoin/block.h>
 #include <ccan/list/list.h>
+#include <lightningd/feerate.h>
 #include <lightningd/watch.h>
 
 struct bitcoin_tx;
@@ -11,20 +12,6 @@ struct command;
 struct lightningd;
 struct peer;
 struct txwatch;
-
-/* FIXME: move all feerate stuff out to new lightningd/feerate.[ch] files */
-enum feerate {
-	/* DO NOT REORDER: force-feerates uses this order! */
-	FEERATE_OPENING,
-	FEERATE_MUTUAL_CLOSE,
-	FEERATE_UNILATERAL_CLOSE,
-	FEERATE_DELAYED_TO_US,
-	FEERATE_HTLC_RESOLUTION,
-	FEERATE_PENALTY,
-	FEERATE_MIN,
-	FEERATE_MAX,
-};
-#define NUM_FEERATES (FEERATE_MAX+1)
 
 /* We keep the last three in case there are outliers (for min/max) */
 #define FEE_HISTORY_NUM 3
@@ -35,6 +22,7 @@ struct outgoing_tx {
 	struct channel *channel;
 	const char *hextx;
 	struct bitcoin_txid txid;
+	const char *cmd_id;
 	void (*failed_or_success)(struct channel *channel, bool success, const char *err);
 };
 
@@ -164,28 +152,21 @@ u32 delayed_to_us_feerate(struct chain_topology *topo);
 u32 htlc_resolution_feerate(struct chain_topology *topo);
 u32 penalty_feerate(struct chain_topology *topo);
 
-const char *feerate_name(enum feerate feerate);
-
-/* Set feerate_per_kw to this estimate & return NULL, or fail cmd */
-struct command_result *param_feerate_estimate(struct command *cmd,
-					      u32 **feerate_per_kw,
-					      enum feerate feerate);
-
-/* Broadcast a single tx, and rebroadcast as reqd (copies tx).
- * If failed is non-NULL, call that and don't rebroadcast. */
+/**
+ * broadcast_tx - Broadcast a single tx, and rebroadcast as reqd (copies tx).
+ * @topo: topology
+ * @channel: the channel responsible for this (stop broadcasting if freed).
+ * @tx: the transaction
+ * @cmd_id: the JSON command id which triggered this (or NULL).
+ * @allowhighfees: set to true to override the high-fee checks in the backend.
+ * @failed: if non-NULL, call that and don't rebroadcast.
+ */
 void broadcast_tx(struct chain_topology *topo,
 		  struct channel *channel, const struct bitcoin_tx *tx,
-		  void (*failed)(struct channel *channel,
+		  const char *cmd_id, bool allowhighfees,
+		  void (*failed)(struct channel *,
 				 bool success,
 				 const char *err));
-/* Like the above, but with an additional `allowhighfees` parameter.
- * If true, suppress any high-fee checks in the backend.  */
-void broadcast_tx_ahf(struct chain_topology *topo,
-		      struct channel *channel, const struct bitcoin_tx *tx,
-		      bool allowhighfees,
-		      void (*failed)(struct channel *channel,
-				     bool success,
-				     const char *err));
 
 struct chain_topology *new_topology(struct lightningd *ld, struct log *log);
 void setup_topology(struct chain_topology *topology,
@@ -214,8 +195,8 @@ static inline bool topology_synced(const struct chain_topology *topo)
  */
 void topology_add_sync_waiter_(const tal_t *ctx,
 			       struct chain_topology *topo,
-			       void (*cb)(struct chain_topology *topo,
-					  void *arg),
+			       void (*cb)(struct chain_topology *,
+					  void *),
 			       void *arg);
 #define topology_add_sync_waiter(ctx, topo, cb, arg)			\
 	topology_add_sync_waiter_((ctx), (topo),			\

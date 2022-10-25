@@ -19,7 +19,6 @@ bool check_config_bounds(const tal_t *ctx,
 			 struct amount_msat min_effective_htlc_capacity,
 			 const struct channel_config *remoteconf,
 			 const struct channel_config *localconf,
-			 bool am_opener,
 			 bool option_anchor_outputs,
 			 char **err_reason)
 {
@@ -178,24 +177,6 @@ bool check_config_bounds(const tal_t *ctx,
 		*err_reason = tal_fmt(ctx,
 				      "max_accepted_htlcs %u too large",
 				      remoteconf->max_accepted_htlcs);
-		return false;
-	}
-
-	/* BOLT #2:
-	 *
-	 * The receiving node MUST fail the channel if:
-	 *...
-	 *  - `dust_limit_satoshis` is greater than `channel_reserve_satoshis`.
-	 */
-	if (amount_sat_greater(remoteconf->dust_limit,
-			       remoteconf->channel_reserve)) {
-		*err_reason = tal_fmt(ctx,
-				      "dust_limit_satoshis %s"
-				      " too large for channel_reserve_satoshis %s",
-				      type_to_string(ctx, struct amount_sat,
-						     &remoteconf->dust_limit),
-				      type_to_string(ctx, struct amount_sat,
-						     &remoteconf->channel_reserve));
 		return false;
 	}
 

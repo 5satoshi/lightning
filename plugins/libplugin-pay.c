@@ -326,7 +326,7 @@ static void channel_hints_update(struct payment *p,
 				 u16 *htlc_budget)
 {
 	struct payment *root = payment_root(p);
-	struct channel_hint hint;
+	struct channel_hint newhint;
 
 	/* If the channel is marked as enabled it must have an estimate. */
 	assert(!enabled || estimated_capacity != NULL);
@@ -372,25 +372,25 @@ static void channel_hints_update(struct payment *p,
 	}
 
 	/* No hint found, create one. */
-	hint.enabled = enabled;
-	hint.scid.scid = scid;
-	hint.scid.dir = direction;
-	hint.local = local;
+	newhint.enabled = enabled;
+	newhint.scid.scid = scid;
+	newhint.scid.dir = direction;
+	newhint.local = local;
 	if (estimated_capacity != NULL)
-		hint.estimated_capacity = *estimated_capacity;
+		newhint.estimated_capacity = *estimated_capacity;
 
 	if (htlc_budget != NULL)
-		hint.htlc_budget = *htlc_budget;
+		newhint.htlc_budget = *htlc_budget;
 
-	tal_arr_expand(&root->channel_hints, hint);
+	tal_arr_expand(&root->channel_hints, newhint);
 
 	paymod_log(
 	    p, LOG_DBG,
 	    "Added a channel hint for %s: enabled %s, estimated capacity %s",
-	    type_to_string(tmpctx, struct short_channel_id_dir, &hint.scid),
-	    hint.enabled ? "true" : "false",
+	    type_to_string(tmpctx, struct short_channel_id_dir, &newhint.scid),
+	    newhint.enabled ? "true" : "false",
 	    type_to_string(tmpctx, struct amount_msat,
-			   &hint.estimated_capacity));
+			   &newhint.estimated_capacity));
 }
 
 static void payment_exclude_most_expensive(struct payment *p)
@@ -515,8 +515,8 @@ static bool payment_chanhints_apply_route(struct payment *p, bool remove)
 		/* For all channels we check that they have a
 		 * sufficiently large estimated capacity to have some
 		 * chance of succeeding. */
-		apply &= amount_msat_greater(curhint->estimated_capacity,
-					     curhop->amount);
+		apply &= amount_msat_greater_eq(curhint->estimated_capacity,
+						curhop->amount);
 
 		if (!apply) {
 			/* This can happen in case of multiple
@@ -530,6 +530,15 @@ static bool payment_chanhints_apply_route(struct payment *p, bool remove)
 				   type_to_string(tmpctx,
 						  struct short_channel_id_dir,
 						  &curhint->scid));
+			paymod_log(
+			    p, LOG_DBG,
+			    "Capacity: estimated_capacity=%s, hop_amount=%s. "
+			    "HTLC Budget: htlc_budget=%d, local=%d",
+			    type_to_string(tmpctx, struct amount_msat,
+					   &curhint->estimated_capacity),
+			    type_to_string(tmpctx, struct amount_msat,
+					   &curhop->amount),
+			    curhint->htlc_budget, curhint->local);
 			return false;
 		}
 	}
@@ -584,10 +593,8 @@ payment_get_excluded_channels(const tal_t *ctx, struct payment *p)
 		if (!hint->enabled)
 			tal_arr_expand(&res, hint->scid);
 
-		else if (amount_msat_greater_eq(p->amount,
-						hint->estimated_capacity))
-			/* We exclude on equality because we've set the
-			 * estimate to the smallest failed attempt. */
+		else if (amount_msat_greater(p->amount,
+					     hint->estimated_capacity))
 			tal_arr_expand(&res, hint->scid);
 
 		else if (hint->local && hint->htlc_budget == 0)
@@ -809,6 +816,10 @@ static struct command_result *payment_getroute(struct payment *p)
 	const char *errstr;
 	struct gossmap *gossmap;
 
+	/* If we retry the getroute call we might already have a route, so
+	 * free an eventual stale route. */
+	p->route = tal_free(p->route);
+
 	gossmap = get_gossmap(p->plugin);
 
 	dst = gossmap_find_node(gossmap, p->getroute->destination);
@@ -916,7 +927,7 @@ static struct payment_result *tal_sendpay_result_from_json(const tal_t *ctx,
 	/* Initial sanity checks, all these fields must exist. */
 	if (idtok == NULL || idtok->type != JSMN_PRIMITIVE ||
 	    hashtok == NULL || hashtok->type != JSMN_STRING ||
-	    senttok == NULL || senttok->type != JSMN_STRING ||
+	    senttok == NULL ||
 	    statustok == NULL || statustok->type != JSMN_STRING) {
 		return NULL;
 	}
@@ -1244,6 +1255,7 @@ handle_intermediate_failure(struct command *cmd,
 			    enum onion_wire failcode)
 {
 	struct payment *root = payment_root(p);
+	struct amount_msat estimated;
 
 	paymod_log(p, LOG_DBG,
 		   "Intermediate node %s reported %04x (%s) at %s on route %s",
@@ -1284,11 +1296,20 @@ handle_intermediate_failure(struct command *cmd,
 		break;
 
 	case WIRE_TEMPORARY_CHANNEL_FAILURE: {
+		estimated = errchan->amount;
+
+		/* Subtract one msat more, since we know that the amount did not
+		 * work. This allows us to then allow on equality, this is for
+		 * example necessary for local channels where exact matches
+		 * should be allowed. */
+		if (!amount_msat_sub(&estimated, estimated, AMOUNT_MSAT(1)))
+			abort();
+
 		/* These are an indication that the capacity was insufficient,
 		 * remember the amount we tried as an estimate. */
 		channel_hints_update(root, errchan->scid,
 				     errchan->direction, true, false,
-				     &errchan->amount, NULL);
+				     &estimated, NULL);
 		goto error;
 	}
 
@@ -1554,7 +1575,7 @@ static struct command_result *payment_createonion_success(struct command *cmd,
 	json_object_end(req->js);
 
 	json_add_sha256(req->js, "payment_hash", p->payment_hash);
-	json_add_amount_msat_only(req->js, "msatoshi", p->amount);
+	json_add_amount_msat_only(req->js, "amount_msat", p->amount);
 
 	json_array_start(req->js, "shared_secrets");
 	secrets = p->createonion_response->shared_secrets;
@@ -1825,7 +1846,9 @@ static void payment_add_attempt(struct json_stream *s, const char *fieldname, st
 		json_add_string(s, "failreason", p->failreason);
 
 	json_add_u64(s, "partid", p->partid);
-	json_add_amount_msat_only(s, "amount", p->amount);
+	if (deprecated_apis)
+		json_add_amount_msat_only(s, "amount", p->amount);
+	json_add_amount_msat_only(s, "amount_msat", p->amount);
 	if (p->parent != NULL)
 		json_add_u64(s, "parent_partid", p->parent->partid);
 
@@ -2291,7 +2314,7 @@ local_channel_hints_listpeers(struct command *cmd, const char *buffer,
 			      const jsmntok_t *toks, struct payment *p)
 {
 	const jsmntok_t *peers, *peer, *channels, *channel, *spendsats, *scid,
-		*dir, *connected, *max_htlc, *htlcs, *state;
+	    *dir, *connected, *max_htlc, *htlcs, *state, *alias, *alias_local;
 	size_t i, j;
 	peers = json_get_member(buffer, toks, "peers");
 
@@ -2309,12 +2332,20 @@ local_channel_hints_listpeers(struct command *cmd, const char *buffer,
 			struct channel_hint h;
 			spendsats = json_get_member(buffer, channel, "spendable_msat");
 			scid = json_get_member(buffer, channel, "short_channel_id");
+
+			alias = json_get_member(buffer, channel, "alias");
+			if (alias != NULL)
+				alias_local = json_get_member(buffer, alias, "local");
+			else
+				alias_local = NULL;
+
 			dir = json_get_member(buffer, channel, "direction");
 			max_htlc = json_get_member(buffer, channel, "max_accepted_htlcs");
 			htlcs = json_get_member(buffer, channel, "htlcs");
 			state = json_get_member(buffer, channel, "state");
-			if (spendsats == NULL || scid == NULL || dir == NULL ||
-			    max_htlc == NULL || state == NULL ||
+			if (spendsats == NULL ||
+			    (scid == NULL && alias_local == NULL) ||
+			    dir == NULL || max_htlc == NULL || state == NULL ||
 			    max_htlc->type != JSMN_PRIMITIVE || htlcs == NULL ||
 			    htlcs->type != JSMN_ARRAY)
 				continue;
@@ -2325,7 +2356,11 @@ local_channel_hints_listpeers(struct command *cmd, const char *buffer,
 			json_to_bool(buffer, connected, &h.enabled);
 			h.enabled &= json_tok_streq(buffer, state, "CHANNELD_NORMAL");
 
-			json_to_short_channel_id(buffer, scid, &h.scid.scid);
+			if (scid != NULL)
+				json_to_short_channel_id(buffer, scid, &h.scid.scid);
+			else
+				json_to_short_channel_id(buffer, alias_local, &h.scid.scid);
+
 			json_to_int(buffer, dir, &h.scid.dir);
 
 			json_to_msat(buffer, spendsats, &h.estimated_capacity);
@@ -3226,9 +3261,17 @@ static struct command_result *direct_pay_listpeers(struct command *cmd,
 			if (!streq(chan->state, "CHANNELD_NORMAL"))
 			    continue;
 
+			/* Must have either a local alias for zeroconf
+			 * channels or a final scid. */
+			assert(chan->alias[LOCAL] || chan->scid);
 			d->chan = tal(d, struct short_channel_id_dir);
-			d->chan->scid = *chan->scid;
-			d->chan->dir = *chan->direction;
+			if (chan->scid) {
+				d->chan->scid = *chan->scid;
+				d->chan->dir = *chan->direction;
+			} else {
+				d->chan->scid = *chan->alias[LOCAL];
+				d->chan->dir = 0; /* Don't care. */
+			}
 		}
 	}
 cont:

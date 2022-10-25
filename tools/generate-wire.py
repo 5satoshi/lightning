@@ -194,7 +194,6 @@ class Type(FieldSet):
         'bool',
         'amount_sat',
         'amount_msat',
-        'errcode_t',
         'bigsize',
         'varint'
     ]
@@ -209,7 +208,6 @@ class Type(FieldSet):
         'secp256k1_ecdsa_recoverable_signature',
         'utf8',
         'wirestring',
-        'errcode_t',
         'bigsize',
         'varint',
     ]
@@ -244,7 +242,7 @@ class Type(FieldSet):
         'tx_parts',
         'wally_psbt',
         'wally_tx',
-        'channel_type',
+        'scb_chan',
     ]
 
     # Some BOLT types are re-typed based on their field name

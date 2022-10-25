@@ -14,7 +14,7 @@ struct PluginState {
     ca_cert: Vec<u8>,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     debug!("Starting grpc plugin");
     let path = Path::new("lightning-rpc");
@@ -22,13 +22,7 @@ async fn main() -> Result<()> {
     let directory = std::env::current_dir()?;
     let (identity, ca_cert) = tls::init(&directory)?;
 
-    let state = PluginState {
-        rpc_path: path.into(),
-        identity,
-        ca_cert,
-    };
-
-    let plugin = match Builder::new(state.clone(), tokio::io::stdin(), tokio::io::stdout())
+    let plugin = match Builder::new(tokio::io::stdin(), tokio::io::stdout())
         .option(options::ConfigOption::new(
             "grpc-port",
             options::Value::Integer(-1),
@@ -54,17 +48,28 @@ async fn main() -> Result<()> {
         Some(o) => return Err(anyhow!("grpc-port is not a valid integer: {:?}", o)),
     };
 
-    let plugin = plugin.start().await?;
+    let state = PluginState {
+        rpc_path: path.into(),
+        identity,
+        ca_cert,
+    };
+
+    let plugin = plugin.start(state.clone()).await?;
 
     let bind_addr: SocketAddr = format!("0.0.0.0:{}", bind_port).parse().unwrap();
 
-    tokio::spawn(async move {
-        if let Err(e) = run_interface(bind_addr, state).await {
-            warn!("Error running the grpc interface: {}", e);
+    tokio::select! {
+        _ = plugin.join() => {
+	    // This will likely never be shown, if we got here our
+	    // parent process is exiting and not processing out log
+	    // messages anymore.
+            debug!("Plugin loop terminated")
         }
-    });
-
-    plugin.join().await
+        e = run_interface(bind_addr, state) => {
+            warn!("Error running grpc interface: {:?}", e)
+        }
+    }
+    Ok(())
 }
 
 async fn run_interface(bind_addr: SocketAddr, state: PluginState) -> Result<()> {

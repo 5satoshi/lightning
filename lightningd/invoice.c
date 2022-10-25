@@ -9,11 +9,9 @@
 #include <common/bolt12_merkle.h>
 #include <common/configdir.h>
 #include <common/json_command.h>
-#include <common/json_helpers.h>
-#include <common/json_tok.h>
+#include <common/json_param.h>
 #include <common/onion.h>
 #include <common/overflows.h>
-#include <common/param.h>
 #include <common/random_select.h>
 #include <common/timeout.h>
 #include <common/type_to_string.h>
@@ -37,8 +35,8 @@ static const char *invoice_status_str(const struct invoice_details *inv)
 	return "unpaid";
 }
 
-static void json_add_invoice(struct json_stream *response,
-			     const struct invoice_details *inv)
+static void json_add_invoice_fields(struct json_stream *response,
+				    const struct invoice_details *inv)
 {
 	json_add_escaped_string(response, "label", inv->label);
 	if (inv->invstring)
@@ -78,6 +76,15 @@ static void json_add_invoice(struct json_stream *response,
 	}
 }
 
+static void json_add_invoice(struct json_stream *response,
+			     const char *fieldname,
+			     const struct invoice_details *inv)
+{
+	json_object_start(response, fieldname);
+	json_add_invoice_fields(response, inv);
+	json_object_end(response);
+}
+
 static struct command_result *tell_waiter(struct command *cmd,
 					  const struct invoice *inv)
 {
@@ -87,12 +94,12 @@ static struct command_result *tell_waiter(struct command *cmd,
 	details = wallet_invoice_details(cmd, cmd->ld->wallet, *inv);
 	if (details->state == PAID) {
 		response = json_stream_success(cmd);
-		json_add_invoice(response, details);
+		json_add_invoice_fields(response, details);
 		return command_success(cmd, response);
 	} else {
 		response = json_stream_fail(cmd, INVOICE_EXPIRED_DURING_WAIT,
 					    "invoice expired during wait");
-		json_add_invoice(response, details);
+		json_add_invoice_fields(response, details);
 		json_object_end(response);
 		return command_failed(cmd, response);
 	}
@@ -471,7 +478,7 @@ void invoice_try_pay(struct lightningd *ld,
 	payload->set = set;
 	tal_add_destructor2(set, invoice_payload_remove_set, payload);
 
-	plugin_hook_call_invoice_payment(ld, payload);
+	plugin_hook_call_invoice_payment(ld, NULL, payload);
 }
 
 static bool hsm_sign_b11(const u5 *u5bytes,
@@ -617,13 +624,17 @@ static struct route_info **select_inchan(const tal_t *ctx,
 
 static int cmp_rr_number(const struct routehint_candidate *a,
 			 const struct routehint_candidate *b,
-			 void *unused)
+			 struct lightningd *ld)
 {
-	/* They're unique, so can't be equal */
 	if (a->c->rr_number > b->c->rr_number)
 		return 1;
-	assert(a->c->rr_number < b->c->rr_number);
-	return -1;
+	if (a->c->rr_number < b->c->rr_number)
+		return -1;
+
+	/* They're unique, so can't be equal */
+	log_broken(ld->log, "Two equal candidates %p and %p, channels %p and %p, rr_number %"PRIu64" and %"PRIu64,
+		   a, b, a->c, b->c, a->c->rr_number, b->c->rr_number);
+	return 0;
 }
 
 /** select_inchan_mpp
@@ -650,7 +661,7 @@ static struct route_info **select_inchan_mpp(const tal_t *ctx,
 	routehints = tal_arr(ctx, struct route_info *, 0);
 
 	/* Sort by rr_number, so we get fresh channels. */
-	asort(candidates, tal_count(candidates), cmp_rr_number, NULL);
+	asort(candidates, tal_count(candidates), cmp_rr_number, ld);
 	for (size_t i = 0; i < tal_count(candidates); i++) {
 		if (amount_msat_greater_eq(gathered, amount_needed))
 			break;
@@ -1147,7 +1158,7 @@ static struct command_result *json_invoice(struct command *cmd,
 	info->cmd = cmd;
 
 	if (!param(cmd, buffer, params,
-		   p_req("msatoshi", param_positive_msat_or_any, &msatoshi_val),
+		   p_req("amount_msat|msatoshi", param_positive_msat_or_any, &msatoshi_val),
 		   p_req("label", param_label, &info->label),
 		   p_req("description", param_escaped_string, &desc_val),
 		   p_opt_def("expiry", param_time, &expiry, 3600*24*7),
@@ -1239,7 +1250,8 @@ static struct command_result *json_invoice(struct command *cmd,
 		info->b11->fallbacks = tal_steal(info->b11, fallback_scripts);
 
 	req = jsonrpc_request_start(info, "listincoming",
-				    cmd->ld->log,
+				    cmd->id,
+				    command_log(cmd),
 				    NULL, listincoming_done,
 				    info);
 	jsonrpc_request_end(req);
@@ -1280,21 +1292,16 @@ static void json_add_invoices(struct json_stream *response,
 	if (label) {
 		if (wallet_invoice_find_by_label(wallet, &invoice, label)) {
 			details =
-			    wallet_invoice_details(response, wallet, invoice);
-			json_object_start(response, NULL);
-			json_add_invoice(response, details);
-			json_object_end(response);
+			    wallet_invoice_details(tmpctx, wallet, invoice);
+			json_add_invoice(response, NULL, details);
 		}
 	} else if (payment_hash != NULL) {
 		if (wallet_invoice_find_by_rhash(wallet, &invoice,
 						 payment_hash)) {
-			json_object_start(response, NULL);
-			json_add_invoice(
-			    response,
-			    wallet_invoice_details(response, wallet, invoice));
-			json_object_end(response);
+			details =
+			    wallet_invoice_details(tmpctx, wallet, invoice);
+			json_add_invoice(response, NULL, details);
 		}
-
 	} else {
 		memset(&it, 0, sizeof(it));
 		while (wallet_invoice_iterate(wallet, &it)) {
@@ -1307,9 +1314,7 @@ static void json_add_invoices(struct json_stream *response,
 						  details->local_offer_id))
 					continue;
 			}
-			json_object_start(response, NULL);
-			json_add_invoice(response, details);
-			json_object_end(response);
+			json_add_invoice(response, NULL, details);
 		}
 	}
 }
@@ -1444,7 +1449,7 @@ static struct command_result *json_delinvoice(struct command *cmd,
 	}
 
 	response = json_stream_success(cmd);
-	json_add_invoice(response, details);
+	json_add_invoice_fields(response, details);
 	return command_success(cmd, response);
 }
 
@@ -1477,7 +1482,8 @@ static const struct json_command delexpiredinvoice_command = {
 	"delexpiredinvoice",
 	"payment",
 	json_delexpiredinvoice,
-	"Delete all expired invoices that expired as of given {maxexpirytime} (a UNIX epoch time), or all expired invoices if not specified"
+	"Delete all expired invoices that expired as of given {maxexpirytime} (a UNIX epoch time), or all expired invoices if not specified",
+	true /*deprecated*/
 };
 AUTODATA(json_command, &delexpiredinvoice_command);
 
@@ -1627,7 +1633,8 @@ static struct command_result *fail_exists(struct command *cmd,
 		fatal("Duplicate invoice %s not found any more?",
 		      label->s);
 
-	json_add_invoice(data, wallet_invoice_details(cmd, wallet, invoice));
+	json_add_invoice_fields(data,
+				wallet_invoice_details(cmd, wallet, invoice));
 	json_object_end(data);
 
 	return command_failed(cmd, data);
@@ -1767,8 +1774,9 @@ static struct command_result *json_createinvoice(struct command *cmd,
 	}
 
 	response = json_stream_success(cmd);
-	json_add_invoice(response,
-			 wallet_invoice_details(cmd, cmd->ld->wallet, invoice));
+	json_add_invoice_fields(response,
+				wallet_invoice_details(cmd, cmd->ld->wallet,
+						       invoice));
 	return command_success(cmd, response);
 }
 

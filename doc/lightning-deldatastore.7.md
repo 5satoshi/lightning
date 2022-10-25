@@ -20,6 +20,7 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **key** (array of strings):
   - Part of the key added to the datastore
 - **generation** (u64, optional): The number of times this has been updated
@@ -48,4 +49,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:ac7468cf6eadc8ab85216b4d5ecb55a32f3d0bc84180f477151c3748901824de)
+[comment]: # ( SHA256STAMP:262227d8b4aaee5cad954afa4335b29bceabd787f346d1e5a990614edac7f5e7)

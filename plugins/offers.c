@@ -3,12 +3,14 @@
 #include <bitcoin/chainparams.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/cast/cast.h>
+#include <ccan/rune/rune.h>
 #include <ccan/tal/str/str.h>
 #include <common/bech32.h>
 #include <common/bolt11.h>
 #include <common/bolt11_json.h>
 #include <common/bolt12_merkle.h>
 #include <common/iso4217.h>
+#include <common/json_param.h>
 #include <common/json_stream.h>
 #include <plugins/offers.h>
 #include <plugins/offers_inv_hook.h>
@@ -41,64 +43,13 @@ static struct command_result *sendonionmessage_error(struct command *cmd,
 	return command_hook_success(cmd);
 }
 
-/* FIXME: replyfield string interface is to accomodate obsolete API */
-static struct command_result *
-send_obs2_onion_reply(struct command *cmd,
-		      struct tlv_obs2_onionmsg_payload_reply_path *reply_path,
-		      const char *replyfield,
-		      const u8 *replydata)
-{
-	struct out_req *req;
-	size_t nhops = tal_count(reply_path->path);
-
-	req = jsonrpc_request_start(cmd->plugin, cmd, "sendobs2onionmessage",
-				    finished, sendonionmessage_error, NULL);
-
-	json_add_pubkey(req->js, "first_id", &reply_path->first_node_id);
-	json_add_pubkey(req->js, "blinding", &reply_path->blinding);
-	json_array_start(req->js, "hops");
-	for (size_t i = 0; i < nhops; i++) {
-		struct tlv_obs2_onionmsg_payload *omp;
-		u8 *tlv;
-
-		json_object_start(req->js, NULL);
-		json_add_pubkey(req->js, "id", &reply_path->path[i]->node_id);
-
-		omp = tlv_obs2_onionmsg_payload_new(tmpctx);
-		omp->enctlv = reply_path->path[i]->encrypted_recipient_data;
-
-		/* Put payload in last hop. */
-		if (i == nhops - 1) {
-			if (streq(replyfield, "invoice")) {
-				omp->invoice = cast_const(u8 *, replydata);
-			} else {
-				assert(streq(replyfield, "invoice_error"));
-				omp->invoice_error = cast_const(u8 *, replydata);
-			}
-		}
-		tlv = tal_arr(tmpctx, u8, 0);
-		towire_tlv_obs2_onionmsg_payload(&tlv, omp);
-		json_add_hex_talarr(req->js, "tlv", tlv);
-		json_object_end(req->js);
-	}
-	json_array_end(req->js);
-	return send_outreq(cmd->plugin, req);
-}
-
 struct command_result *
 send_onion_reply(struct command *cmd,
 		 struct tlv_onionmsg_payload_reply_path *reply_path,
-		 struct tlv_obs2_onionmsg_payload_reply_path *obs2_reply_path,
-		 const char *replyfield,
-		 const u8 *replydata)
+		 struct tlv_onionmsg_payload *payload)
 {
 	struct out_req *req;
 	size_t nhops;
-
-	/* Exactly one must be set! */
-	assert(!reply_path != !obs2_reply_path);
-	if (obs2_reply_path)
-		return send_obs2_onion_reply(cmd, obs2_reply_path, replyfield, replydata);
 
 	req = jsonrpc_request_start(cmd->plugin, cmd, "sendonionmessage",
 				    finished, sendonionmessage_error, NULL);
@@ -115,18 +66,14 @@ send_onion_reply(struct command *cmd,
 		json_object_start(req->js, NULL);
 		json_add_pubkey(req->js, "id", &reply_path->path[i]->node_id);
 
-		omp = tlv_onionmsg_payload_new(tmpctx);
+		/* Put payload in last hop. */
+		if (i == nhops - 1)
+			omp = payload;
+		else
+			omp = tlv_onionmsg_payload_new(tmpctx);
+
 		omp->encrypted_data_tlv = reply_path->path[i]->encrypted_recipient_data;
 
-		/* Put payload in last hop. */
-		if (i == nhops - 1) {
-			if (streq(replyfield, "invoice")) {
-				omp->invoice = cast_const(u8 *, replydata);
-			} else {
-				assert(streq(replyfield, "invoice_error"));
-				omp->invoice_error = cast_const(u8 *, replydata);
-			}
-		}
 		tlv = tal_arr(tmpctx, u8, 0);
 		towire_tlv_onionmsg_payload(&tlv, omp);
 		json_add_hex_talarr(req->js, "tlv", tlv);
@@ -141,7 +88,6 @@ static struct command_result *onion_message_modern_call(struct command *cmd,
 							const jsmntok_t *params)
 {
 	const jsmntok_t *om, *replytok, *invreqtok, *invtok;
-	struct tlv_obs2_onionmsg_payload_reply_path *obs2_reply_path = NULL;
 	struct tlv_onionmsg_payload_reply_path *reply_path = NULL;
 
 	if (!offers_enabled)
@@ -150,31 +96,20 @@ static struct command_result *onion_message_modern_call(struct command *cmd,
 	om = json_get_member(buf, params, "onion_message");
 	replytok = json_get_member(buf, om, "reply_blindedpath");
 	if (replytok) {
-		bool obs2;
-		json_to_bool(buf, json_get_member(buf, om, "obs2"), &obs2);
-		if (obs2) {
-			obs2_reply_path = json_to_obs2_reply_path(cmd, buf, replytok);
-			if (!obs2_reply_path)
-				plugin_err(cmd->plugin, "Invalid obs2 reply path %.*s?",
-					   json_tok_full_len(replytok),
-					   json_tok_full(buf, replytok));
-		} else {
-			reply_path = json_to_reply_path(cmd, buf, replytok);
-			if (!reply_path)
-				plugin_err(cmd->plugin, "Invalid reply path %.*s?",
-					   json_tok_full_len(replytok),
-					   json_tok_full(buf, replytok));
-		}
+		reply_path = json_to_reply_path(cmd, buf, replytok);
+		if (!reply_path)
+			plugin_err(cmd->plugin, "Invalid reply path %.*s?",
+				   json_tok_full_len(replytok),
+				   json_tok_full(buf, replytok));
 	}
 
 	invreqtok = json_get_member(buf, om, "invoice_request");
 	if (invreqtok) {
 		const u8 *invreqbin = json_tok_bin_from_hex(tmpctx, buf, invreqtok);
-		if (reply_path || obs2_reply_path)
+		if (reply_path)
 			return handle_invoice_request(cmd,
 						      invreqbin,
-						      reply_path,
-						      obs2_reply_path);
+						      reply_path);
 		else
 			plugin_log(cmd->plugin, LOG_DBG,
 				   "invoice_request without reply_path");
@@ -184,7 +119,7 @@ static struct command_result *onion_message_modern_call(struct command *cmd,
 	if (invtok) {
 		const u8 *invbin = json_tok_bin_from_hex(tmpctx, buf, invtok);
 		if (invbin)
-			return handle_invoice(cmd, invbin, reply_path, obs2_reply_path);
+			return handle_invoice(cmd, invbin, reply_path);
 	}
 
 	return command_hook_success(cmd);
@@ -203,6 +138,7 @@ struct decodable {
 	struct tlv_offer *offer;
 	struct tlv_invoice *invoice;
 	struct tlv_invoice_request *invreq;
+	struct rune *rune;
 };
 
 static struct command_result *param_decodable(struct command *cmd,
@@ -267,6 +203,13 @@ static struct command_result *param_decodable(struct command *cmd,
 				       likely_fail ? &fail : &likely_fail);
 	if (decodable->b11) {
 		decodable->type = "bolt11 invoice";
+		return NULL;
+	}
+
+	decodable->rune = rune_from_base64n(decodable, buffer + tok.start,
+					    tok.end - tok.start);
+	if (decodable->rune) {
+		decodable->type = "rune";
 		return NULL;
 	}
 
@@ -402,14 +345,9 @@ static void json_add_offer(struct json_stream *js, const struct tlv_offer *offer
 		valid = false;
 	}
 
-	if (offer->issuer) {
+	if (offer->issuer)
 		json_add_stringn(js, "issuer", offer->issuer,
 				 tal_bytelen(offer->issuer));
-		if (deprecated_apis) {
-			json_add_stringn(js, "vendor", offer->issuer,
-					 tal_bytelen(offer->issuer));
-		}
-	}
 	if (offer->features)
 		json_add_hex_talarr(js, "features", offer->features);
 	if (offer->absolute_expiry)
@@ -569,14 +507,9 @@ static void json_add_b12_invoice(struct json_stream *js,
 		valid = false;
 	}
 
-	if (invoice->issuer) {
+	if (invoice->issuer)
 		json_add_stringn(js, "issuer", invoice->issuer,
 				 tal_bytelen(invoice->issuer));
-		if (deprecated_apis) {
-			json_add_stringn(js, "vendor", invoice->issuer,
-					 tal_bytelen(invoice->issuer));
-		}
-	}
 	if (invoice->features)
 		json_add_hex_talarr(js, "features", invoice->features);
 	if (invoice->paths) {
@@ -634,9 +567,6 @@ static void json_add_b12_invoice(struct json_stream *js,
 	 *   - MUST reject the invoice if `created_at` is not present.
 	 */
 	if (invoice->created_at) {
-		/* FIXME: Remove soon! */
-		if (deprecated_apis)
-			json_add_u64(js, "timestamp", *invoice->created_at);
 		json_add_u64(js, "created_at", *invoice->created_at);
 	} else {
 		json_add_string(js, "warning_invoice_missing_created_at",
@@ -779,24 +709,9 @@ static void json_add_invoice_request(struct json_stream *js,
 					       "signature",
 					       invreq->payer_key,
 					       invreq->signature)) {
-			bool sig_valid;
-
-			if (deprecated_apis) {
-				/* The old name? */
-				sig_valid = bolt12_check_signature(invreq->fields,
-								   "invoice_request",
-								   "payer_signature",
-								   invreq->payer_key,
-								   invreq->signature);
-			} else {
-				sig_valid = false;
-			}
-
-			if (!sig_valid) {
-				json_add_string(js, "warning_invoice_request_invalid_signature",
-						"Bad signature");
-				valid = false;
-			}
+			json_add_string(js, "warning_invoice_request_invalid_signature",
+					"Bad signature");
+			valid = false;
 		}
 	} else {
 		json_add_string(js, "warning_invoice_request_missing_signature",
@@ -805,6 +720,171 @@ static void json_add_invoice_request(struct json_stream *js,
 	}
 
 	json_add_bool(js, "valid", valid);
+}
+
+static void json_add_rune(struct command *cmd, struct json_stream *js, const struct rune *rune)
+{
+	const char *string;
+
+	/* Simplest to check everything for UTF-8 compliance at once.
+	 * Since separators are | and & (which cannot appear inside
+	 * UTF-8 multichars), if the entire thing is valid UTF-8 then
+	 * each part is. */
+	string = rune_to_string(tmpctx, rune);
+	if (!utf8_check(string, strlen(string))) {
+		json_add_hex(js, "hex", string, strlen(string));
+		json_add_string(js, "warning_rune_invalid_utf8",
+				"Rune contains invalid UTF-8 strings");
+		json_add_bool(js, "valid", false);
+		return;
+	}
+
+	if (rune->unique_id)
+		json_add_string(js, "unique_id", rune->unique_id);
+	if (rune->version)
+		json_add_string(js, "version", rune->version);
+	json_add_string(js, "string", take(string));
+
+	json_array_start(js, "restrictions");
+	for (size_t i = rune->unique_id ? 1 : 0; i < tal_count(rune->restrs); i++) {
+		const struct rune_restr *restr = rune->restrs[i];
+		char *summary = tal_strdup(tmpctx, "");
+		const char *sep = "";
+
+		json_object_start(js, NULL);
+		json_array_start(js, "alternatives");
+		for (size_t j = 0; j < tal_count(restr->alterns); j++) {
+			const struct rune_altern *alt = restr->alterns[j];
+			const char *annotation, *value;
+			bool int_val = false, time_val = false;
+
+			if (streq(alt->fieldname, "time")) {
+				annotation = "in seconds since 1970";
+				time_val = true;
+			} else if (streq(alt->fieldname, "id"))
+				annotation = "of commanding peer";
+			else if (streq(alt->fieldname, "method"))
+				annotation = "of command";
+			else if (streq(alt->fieldname, "pnum")) {
+				annotation = "number of command parameters";
+				int_val = true;
+			} else if (streq(alt->fieldname, "rate")) {
+				annotation = "max per minute";
+				int_val = true;
+			} else if (strstarts(alt->fieldname, "parr")) {
+				annotation = tal_fmt(tmpctx, "array parameter #%s", alt->fieldname+4);
+			} else if (strstarts(alt->fieldname, "pname"))
+				annotation = tal_fmt(tmpctx, "object parameter '%s'", alt->fieldname+5);
+			else
+				annotation = "unknown condition?";
+
+			tal_append_fmt(&summary, "%s", sep);
+
+			/* Where it's ambiguous, quote if it's not treated as an int */
+			if (int_val)
+				value = alt->value;
+			else if (time_val) {
+				u64 t = atol(alt->value);
+
+				if (t) {
+					u64 diff, now = time_now().ts.tv_sec;
+					/* Need a non-const during construction */
+					char *v;
+
+					if (now > t)
+						diff = now - t;
+					else
+						diff = t - now;
+					if (diff < 60)
+						v = tal_fmt(tmpctx, "%"PRIu64" seconds", diff);
+					else if (diff < 60 * 60)
+						v = tal_fmt(tmpctx, "%"PRIu64" minutes %"PRIu64" seconds",
+							    diff / 60, diff % 60);
+					else {
+						v = tal_strdup(tmpctx, "approximately ");
+						/* diff is in minutes */
+						diff /= 60;
+						if (diff < 48 * 60)
+							tal_append_fmt(&v, "%"PRIu64" hours %"PRIu64" minutes",
+								       diff / 60, diff % 60);
+						else {
+							/* hours */
+							diff /= 60;
+							if (diff < 60 * 24)
+								tal_append_fmt(&v, "%"PRIu64" days %"PRIu64" hours",
+									       diff / 24, diff % 24);
+							else {
+								/* days */
+								diff /= 24;
+								if (diff < 365 * 2)
+									tal_append_fmt(&v, "%"PRIu64" months %"PRIu64" days",
+										       diff / 30, diff % 30);
+								else {
+									/* months */
+									diff /= 30;
+									tal_append_fmt(&v, "%"PRIu64" years %"PRIu64" months",
+										       diff / 12, diff % 12);
+								}
+							}
+						}
+					}
+					if (now > t)
+						tal_append_fmt(&v, " ago");
+					else
+						tal_append_fmt(&v, " from now");
+					value = tal_fmt(tmpctx, "%s (%s)", alt->value, v);
+				} else
+					value = alt->value;
+			} else
+				value = tal_fmt(tmpctx, "'%s'", alt->value);
+
+			switch (alt->condition) {
+			case RUNE_COND_IF_MISSING:
+				tal_append_fmt(&summary, "%s (%s) is missing", alt->fieldname, annotation);
+				break;
+			case RUNE_COND_EQUAL:
+				tal_append_fmt(&summary, "%s (%s) equal to %s", alt->fieldname, annotation, value);
+				break;
+			case RUNE_COND_NOT_EQUAL:
+				tal_append_fmt(&summary, "%s (%s) unequal to %s", alt->fieldname, annotation, value);
+				break;
+			case RUNE_COND_BEGINS:
+				tal_append_fmt(&summary, "%s (%s) starts with '%s'", alt->fieldname, annotation, alt->value);
+				break;
+			case RUNE_COND_ENDS:
+				tal_append_fmt(&summary, "%s (%s) ends with '%s'", alt->fieldname, annotation, alt->value);
+				break;
+			case RUNE_COND_CONTAINS:
+				tal_append_fmt(&summary, "%s (%s) contains '%s'", alt->fieldname, annotation, alt->value);
+				break;
+			case RUNE_COND_INT_LESS:
+				tal_append_fmt(&summary, "%s (%s) less than %s", alt->fieldname, annotation,
+					       time_val ? value : alt->value);
+				break;
+			case RUNE_COND_INT_GREATER:
+				tal_append_fmt(&summary, "%s (%s) greater than %s", alt->fieldname, annotation,
+					       time_val ? value : alt->value);
+				break;
+			case RUNE_COND_LEXO_BEFORE:
+				tal_append_fmt(&summary, "%s (%s) sorts before '%s'", alt->fieldname, annotation, alt->value);
+				break;
+			case RUNE_COND_LEXO_AFTER:
+				tal_append_fmt(&summary, "%s (%s) sorts after '%s'", alt->fieldname, annotation, alt->value);
+				break;
+			case RUNE_COND_COMMENT:
+				tal_append_fmt(&summary, "[comment: %s%s]", alt->fieldname, alt->value);
+				break;
+			}
+			sep = " OR ";
+			json_add_str_fmt(js, NULL, "%s%c%s", alt->fieldname, alt->condition, alt->value);
+		}
+		json_array_end(js);
+		json_add_string(js, "summary", summary);
+		json_object_end(js);
+	}
+	json_array_end(js);
+	/* FIXME: do some sanity checks? */
+	json_add_bool(js, "valid", true);
 }
 
 static struct command_result *json_decode(struct command *cmd,
@@ -832,6 +912,8 @@ static struct command_result *json_decode(struct command *cmd,
 		json_add_bolt11(response, decodable->b11);
 		json_add_bool(response, "valid", true);
 	}
+	if (decodable->rune)
+		json_add_rune(cmd, response, decodable->rune);
 	return command_finished(cmd, response);
 }
 

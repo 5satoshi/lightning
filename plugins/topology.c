@@ -6,8 +6,8 @@
 #include <ccan/tal/str/str.h>
 #include <common/dijkstra.h>
 #include <common/gossmap.h>
+#include <common/json_param.h>
 #include <common/json_stream.h>
-#include <common/json_tok.h>
 #include <common/memleak.h>
 #include <common/pseudorand.h>
 #include <common/route.h>
@@ -130,7 +130,7 @@ static struct command_result *json_getroute(struct command *cmd,
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_node_id, &destination),
-		   p_req("msatoshi", param_msat, &msat),
+		   p_req("amount_msat|msatoshi", param_msat, &msat),
 		   p_req("riskfactor", param_millionths, &riskfactor_millionths),
 		   p_opt_def("cltv", param_number, &cltv, 9),
 		   p_opt_def("fromid", param_node_id, &source, local_id),
@@ -280,21 +280,8 @@ static void json_add_halfchan(struct json_stream *response,
 		json_add_num(response, "delay", c->half[dir].delay);
 		json_add_amount_msat_only(response, "htlc_minimum_msat",
 					  htlc_minimum_msat);
-
-		/* We used to always print this, but that's weird */
-		if (deprecated_apis && !(message_flags & 1)) {
-			if (!amount_sat_to_msat(&htlc_maximum_msat, capacity))
-				plugin_err(plugin,
-					   "Channel with impossible capacity %s",
-					   type_to_string(tmpctx,
-							  struct amount_sat,
-							  &capacity));
-			message_flags = 1;
-		}
-
-		if (message_flags & 1)
-			json_add_amount_msat_only(response, "htlc_maximum_msat",
-						  htlc_maximum_msat);
+		json_add_amount_msat_only(response, "htlc_maximum_msat",
+					  htlc_maximum_msat);
 		json_add_hex_talarr(response, "features", chanfeatures);
 		json_object_end(response);
 	}
@@ -557,9 +544,9 @@ static struct amount_msat peer_capacity(const struct gossmap *gossmap,
 			continue;
 		if (!c->half[!dir].enabled)
 			continue;
-		if (!amount_msat_add(&capacity, capacity,
-				    amount_msat(fp16_to_u64(c->half[dir]
-							   .htlc_max))))
+		if (!amount_msat_add(
+			&capacity, capacity,
+			amount_msat(fp16_to_u64(c->half[!dir].htlc_max))))
 			continue;
 	}
 	return capacity;
@@ -626,8 +613,7 @@ done:
 #if DEVELOPER
 static void memleak_mark(struct plugin *p, struct htable *memtable)
 {
-	memleak_remove_region(memtable, global_gossmap,
-			      tal_bytelen(global_gossmap));
+	memleak_scan_obj(memtable, global_gossmap);
 }
 #endif
 

@@ -381,6 +381,29 @@
             "Feerates.perkw": 3,
             "Feerates.warning_missing_feerates": 1
         },
+        "FundchannelRequest": {
+            "FundChannel.amount": 1,
+            "FundChannel.announce": 3,
+            "FundChannel.close_to": 6,
+            "FundChannel.compact_lease": 8,
+            "FundChannel.feerate": 2,
+            "FundChannel.id": 9,
+            "FundChannel.minconf": 10,
+            "FundChannel.minconf[]": 4,
+            "FundChannel.mindepth": 12,
+            "FundChannel.push_msat": 5,
+            "FundChannel.request_amt": 7,
+            "FundChannel.reserve": 13,
+            "FundChannel.utxos[]": 11
+        },
+        "FundchannelResponse": {
+            "FundChannel.channel_id": 4,
+            "FundChannel.close_to": 5,
+            "FundChannel.mindepth": 6,
+            "FundChannel.outnum": 3,
+            "FundChannel.tx": 1,
+            "FundChannel.txid": 2
+        },
         "FundpsbtRequest": {
             "FundPsbt.excess_as_change": 8,
             "FundPsbt.feerate": 2,
@@ -432,6 +455,7 @@
             "Getinfo.fees_collected_msat": 13,
             "Getinfo.id": 1,
             "Getinfo.lightning-dir": 9,
+            "Getinfo.msatoshi_fees_collected": 18,
             "Getinfo.network": 12,
             "Getinfo.num_active_channels": 6,
             "Getinfo.num_inactive_channels": 7,
@@ -443,6 +467,7 @@
             "Getinfo.warning_lightningd_sync": 17
         },
         "GetrouteRequest": {
+            "GetRoute.amount_msat": 9,
             "GetRoute.cltv": 4,
             "GetRoute.exclude[]": 7,
             "GetRoute.fromid": 5,
@@ -461,9 +486,11 @@
             "GetRoute.route[].delay": 5,
             "GetRoute.route[].direction": 3,
             "GetRoute.route[].id": 1,
+            "GetRoute.route[].msatoshi": 7,
             "GetRoute.route[].style": 6
         },
         "InvoiceRequest": {
+            "Invoice.amount_msat": 10,
             "Invoice.cltv": 6,
             "Invoice.deschashonly": 9,
             "Invoice.description": 2,
@@ -486,6 +513,7 @@
             "Invoice.warning_private_unused": 8
         },
         "KeysendRequest": {
+            "KeySend.amount_msat": 10,
             "KeySend.destination": 1,
             "KeySend.exemptfee": 7,
             "KeySend.extratlvs": 9,
@@ -548,8 +576,10 @@
         "ListforwardsForwards": {
             "ListForwards.forwards[].fee_msat": 7,
             "ListForwards.forwards[].in_channel": 1,
+            "ListForwards.forwards[].in_htlc_id": 10,
             "ListForwards.forwards[].in_msat": 2,
             "ListForwards.forwards[].out_channel": 5,
+            "ListForwards.forwards[].out_htlc_id": 11,
             "ListForwards.forwards[].out_msat": 8,
             "ListForwards.forwards[].payment_hash": 6,
             "ListForwards.forwards[].received_time": 4,
@@ -580,6 +610,7 @@
             "ListFunds.outputs[].blockheight": 8,
             "ListFunds.outputs[].output": 2,
             "ListFunds.outputs[].redeemscript": 6,
+            "ListFunds.outputs[].reserved": 9,
             "ListFunds.outputs[].scriptpubkey": 4,
             "ListFunds.outputs[].status": 7,
             "ListFunds.outputs[].txid": 1
@@ -640,12 +671,15 @@
             "ListPays.pays[].amount_sent_msat": 9,
             "ListPays.pays[].bolt11": 6,
             "ListPays.pays[].bolt12": 7,
+            "ListPays.pays[].completed_at": 12,
             "ListPays.pays[].created_at": 4,
             "ListPays.pays[].description": 11,
             "ListPays.pays[].destination": 3,
             "ListPays.pays[].erroronion": 10,
             "ListPays.pays[].label": 5,
+            "ListPays.pays[].number_of_parts": 14,
             "ListPays.pays[].payment_hash": 1,
+            "ListPays.pays[].preimage": 13,
             "ListPays.pays[].status": 2
         },
         "ListpaysRequest": {
@@ -662,9 +696,11 @@
             "ListPeers.peers[].features": 6,
             "ListPeers.peers[].id": 1,
             "ListPeers.peers[].log[]": 3,
-            "ListPeers.peers[].netaddr[]": 5
+            "ListPeers.peers[].netaddr[]": 5,
+            "ListPeers.peers[].remote_addr": 7
         },
         "ListpeersPeersChannels": {
+            "ListPeers.peers[].channels[].alias": 50,
             "ListPeers.peers[].channels[].channel_id": 6,
             "ListPeers.peers[].channels[].close_to": 14,
             "ListPeers.peers[].channels[].close_to_addr": 47,
@@ -715,13 +751,21 @@
             "ListPeers.peers[].channels[].to_us_msat": 20,
             "ListPeers.peers[].channels[].total_msat": 23
         },
+        "ListpeersPeersChannelsAlias": {
+            "ListPeers.peers[].channels[].alias.local": 1,
+            "ListPeers.peers[].channels[].alias.remote": 2
+        },
         "ListpeersPeersChannelsFeerate": {
             "ListPeers.peers[].channels[].feerate.perkb": 2,
             "ListPeers.peers[].channels[].feerate.perkw": 1
         },
         "ListpeersPeersChannelsFunding": {
+            "ListPeers.peers[].channels[].funding.fee_paid_msat": 5,
+            "ListPeers.peers[].channels[].funding.fee_rcvd_msat": 6,
+            "ListPeers.peers[].channels[].funding.local_funds_msat": 4,
             "ListPeers.peers[].channels[].funding.local_msat": 1,
             "ListPeers.peers[].channels[].funding.pushed_msat": 3,
+            "ListPeers.peers[].channels[].funding.remote_funds_msat": 7,
             "ListPeers.peers[].channels[].funding.remote_msat": 2
         },
         "ListpeersPeersChannelsHtlcs": {
@@ -805,6 +849,7 @@
             "ListTransactions.transactions[].inputs[].type": 4
         },
         "ListtransactionsTransactionsOutputs": {
+            "ListTransactions.transactions[].outputs[].amount_msat": 6,
             "ListTransactions.transactions[].outputs[].channel": 5,
             "ListTransactions.transactions[].outputs[].index": 1,
             "ListTransactions.transactions[].outputs[].msat": 2,
@@ -819,6 +864,7 @@
             "NewAddr.p2sh-segwit": 2
         },
         "PayRequest": {
+            "Pay.amount_msat": 13,
             "Pay.bolt11": 1,
             "Pay.description": 12,
             "Pay.exclude": 10,
@@ -857,6 +903,7 @@
             "SendOnion.first_hop.id": 1
         },
         "SendonionRequest": {
+            "SendOnion.amount_msat": 12,
             "SendOnion.bolt11": 7,
             "SendOnion.destination": 9,
             "SendOnion.first_hop": 2,
@@ -885,6 +932,7 @@
             "SendOnion.status": 3
         },
         "SendpayRequest": {
+            "SendPay.amount_msat": 10,
             "SendPay.bolt11": 5,
             "SendPay.groupid": 9,
             "SendPay.label": 3,
@@ -900,6 +948,7 @@
             "SendPay.amount_sent_msat": 8,
             "SendPay.bolt11": 11,
             "SendPay.bolt12": 12,
+            "SendPay.completed_at": 15,
             "SendPay.created_at": 7,
             "SendPay.destination": 6,
             "SendPay.groupid": 2,
@@ -912,6 +961,7 @@
             "SendPay.status": 4
         },
         "SendpayRoute": {
+            "SendPay.route[].amount_msat": 5,
             "SendPay.route[].channel": 4,
             "SendPay.route[].delay": 3,
             "SendPay.route[].id": 2,
@@ -924,6 +974,28 @@
         "SendpsbtResponse": {
             "SendPsbt.tx": 1,
             "SendPsbt.txid": 2
+        },
+        "SetchannelChannels": {
+            "SetChannel.channels[].channel_id": 2,
+            "SetChannel.channels[].fee_base_msat": 4,
+            "SetChannel.channels[].fee_proportional_millionths": 5,
+            "SetChannel.channels[].maximum_htlc_out_msat": 8,
+            "SetChannel.channels[].minimum_htlc_out_msat": 6,
+            "SetChannel.channels[].peer_id": 1,
+            "SetChannel.channels[].short_channel_id": 3,
+            "SetChannel.channels[].warning_htlcmax_too_high": 9,
+            "SetChannel.channels[].warning_htlcmin_too_low": 7
+        },
+        "SetchannelRequest": {
+            "SetChannel.enforcedelay": 6,
+            "SetChannel.feebase": 2,
+            "SetChannel.feeppm": 3,
+            "SetChannel.htlcmax": 5,
+            "SetChannel.htlcmin": 4,
+            "SetChannel.id": 1
+        },
+        "SetchannelResponse": {
+            "SetChannel.channels[]": 1
         },
         "SignmessageRequest": {
             "SignMessage.message": 1
@@ -1039,6 +1111,7 @@
             "WaitSendPay.amount_sent_msat": 8,
             "WaitSendPay.bolt11": 11,
             "WaitSendPay.bolt12": 12,
+            "WaitSendPay.completed_at": 14,
             "WaitSendPay.created_at": 7,
             "WaitSendPay.destination": 6,
             "WaitSendPay.groupid": 2,

@@ -62,9 +62,6 @@ struct config {
 	/* Minimal amount of effective funding_satoshis for accepting channels */
 	u64 min_capacity_sat;
 
-	/* Allow to define the default behavior of tor services calls*/
-	bool use_v3_autotor;
-
 	/* This is the key we use to encrypt `hsm_secret`. */
 	struct secret *keypass;
 
@@ -73,6 +70,12 @@ struct config {
 
 	/* EXPERIMENTAL: offers support */
 	bool exp_offers;
+
+	/* Allow dust reserves (including 0) when being called via
+	 * `fundchannel` or in the `openchannel` hook. This is a
+	 * slight spec incompatibility, but implementations do this
+	 * already. */
+	bool allowdustreserve;
 };
 
 typedef STRMAP(const char *) alt_subdaemon_map;
@@ -113,7 +116,7 @@ struct lightningd {
 	struct log_book *log_book;
 	/* Log for general stuff. */
 	struct log *log;
-	const char *logfile;
+	const char **logfiles;
 
 	/* This is us. */
 	struct node_id id;
@@ -160,6 +163,10 @@ struct lightningd {
 	struct wireaddr *remote_addr_v6;
 	struct node_id remote_addr_v4_peer;
 	struct node_id remote_addr_v6_peer;
+
+	/* verified discovered IPs to be used for anouncement */
+	struct wireaddr *discovered_ip_v4;
+	struct wireaddr *discovered_ip_v6;
 
 	/* Bearer of all my secrets. */
 	int hsm_fd;
@@ -224,6 +231,9 @@ struct lightningd {
 	 * FEERATE_PENALTY). */
 	u32 *force_feerates;
 
+	/* If they force db upgrade on or off this is set. */
+	bool *db_upgrade_ok;
+
 #if DEVELOPER
 	/* If we want to debug a subdaemon/plugin. */
 	const char *dev_debug_subprocess;
@@ -246,6 +256,9 @@ struct lightningd {
 	/* Speedup gossip propagation, for testing. */
 	bool dev_fast_gossip;
 	bool dev_fast_gossip_prune;
+
+	/* Speedup reconnect delay, for testing. */
+	bool dev_fast_reconnect;
 
 	/* This is the forced private key for the node. */
 	struct privkey *dev_force_privkey;
@@ -270,7 +283,7 @@ struct lightningd {
 	u32 dev_max_funding_unconfirmed;
 
 	/* Special switches to test onion compatibility */
-	bool dev_ignore_modern_onion, dev_ignore_obsolete_onion;
+	bool dev_ignore_modern_onion;
 
 	/* Tell channeld to disable commits after this many. */
 	int dev_disable_commit;

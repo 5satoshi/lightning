@@ -48,12 +48,13 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **base** (u32): The fee_base_msat value
 - **ppm** (u32): The fee_proportional_millionths value
 - **channels** (array of objects): channel(s) whose rate is now set:
-  - **peer_id** (pubkey): The node_id of the peer
-  - **channel_id** (hex): The channel_id of the channel (always 64 characters)
-  - **short_channel_id** (short_channel_id, optional): the short_channel_id (if locked in)
+  - **peer\_id** (pubkey): The node_id of the peer
+  - **channel\_id** (hex): The channel_id of the channel (always 64 characters)
+  - **short\_channel\_id** (short\_channel\_id, optional): the short_channel_id (if locked in)
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
 
@@ -82,4 +83,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:2245fde48f1858886e0f484cb3d96331fef9c41b0081ae51478d912189c38907)
+[comment]: # ( SHA256STAMP:a7f079e9a25ee5f4c3d8bf3ed2c61d2f807eae99e6bfe02b0737a9692aca503b)
