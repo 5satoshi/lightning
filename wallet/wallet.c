@@ -4570,7 +4570,7 @@ const struct forwarding *wallet_forwarded_payments_get(struct wallet *w,
 	if (timestamp) {
 		// specific out_channel
 		db_bind_int(stmt, 6, 0);
-		db_bind_u32(stmt, 7, timestamp->u32);
+		db_bind_int(stmt, 7, timestamp);
 	} else {
 		// any out_channel
 		db_bind_int(stmt, 6, 1);
