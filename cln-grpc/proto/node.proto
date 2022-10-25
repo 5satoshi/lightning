@@ -1211,6 +1211,7 @@ message ListforwardsRequest {
 	optional ListforwardsStatus status = 1;
 	optional string in_channel = 2;
 	optional string out_channel = 3;
+	optional string timelimit = 4;
 }
 
 message ListforwardsResponse {

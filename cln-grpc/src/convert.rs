@@ -52,8 +52,8 @@ impl From<responses::GetinfoResponse> for pb::GetinfoResponse {
             network: c.network, // Rule #2 for type string
             msatoshi_fees_collected: c.msatoshi_fees_collected, // Rule #2 for type u64?
             fees_collected_msat: Some(c.fees_collected_msat.into()), // Rule #2 for type msat
-            address: c.address.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
-            binding: c.binding.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
+            address: c.address.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+            binding: c.binding.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             warning_bitcoind_sync: c.warning_bitcoind_sync, // Rule #2 for type string?
             warning_lightningd_sync: c.warning_lightningd_sync, // Rule #2 for type string?
         }
@@ -109,6 +109,7 @@ impl From<responses::ListpeersPeersChannels> for pb::ListpeersPeersChannels {
     fn from(c: responses::ListpeersPeersChannels) -> Self {
         Self {
             state: c.state as i32,
+<<<<<<< HEAD
             scratch_txid: c.scratch_txid.map(|v| hex::decode(v).unwrap()), // Rule #2 for type txid?
             owner: c.owner, // Rule #2 for type string?
             short_channel_id: c.short_channel_id.map(|v| v.to_string()), // Rule #2 for type short_channel_id?
@@ -119,12 +120,30 @@ impl From<responses::ListpeersPeersChannels> for pb::ListpeersPeersChannels {
             last_feerate: c.last_feerate, // Rule #2 for type string?
             next_feerate: c.next_feerate, // Rule #2 for type string?
             next_fee_step: c.next_fee_step, // Rule #2 for type u32?
-            inflight: c.inflight.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
+            inflight: c.inflight.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             close_to: c.close_to.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
             private: c.private, // Rule #2 for type boolean?
             opener: c.opener as i32,
             closer: c.closer.map(|v| v as i32),
-            features: c.features.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListpeersPeersChannelsFeatures 
+            features: c.features.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListpeersPeersChannelsFeatures
+=======
+            scratch_txid: c.scratch_txid.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type txid?
+            owner: c.owner.clone(), // Rule #2 for type string?
+            short_channel_id: c.short_channel_id.as_ref().map(|v| v.to_string()), // Rule #2 for type short_channel_id?
+            channel_id: c.channel_id.clone().map(|v| v.to_vec()), // Rule #2 for type hash?
+            funding_txid: c.funding_txid.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type txid?
+            funding_outnum: c.funding_outnum.clone(), // Rule #2 for type u32?
+            initial_feerate: c.initial_feerate.clone(), // Rule #2 for type string?
+            last_feerate: c.last_feerate.clone(), // Rule #2 for type string?
+            next_feerate: c.next_feerate.clone(), // Rule #2 for type string?
+            next_fee_step: c.next_fee_step.clone(), // Rule #2 for type u32?
+            inflight: c.inflight.as_ref().map(|arr| arr.iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+            close_to: c.close_to.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type hex?
+            private: c.private.clone(), // Rule #2 for type boolean?
+            opener: c.opener as i32,
+            closer: c.closer.map(|v| v as i32),
+            features: c.features.iter().map(|i| i.into()).collect(), // Rule #3 for type ListpeersPeersChannelsFeatures
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
             to_us_msat: c.to_us_msat.map(|f| f.into()), // Rule #2 for type msat?
             min_to_us_msat: c.min_to_us_msat.map(|f| f.into()), // Rule #2 for type msat?
             max_to_us_msat: c.max_to_us_msat.map(|f| f.into()), // Rule #2 for type msat?
@@ -140,11 +159,19 @@ impl From<responses::ListpeersPeersChannels> for pb::ListpeersPeersChannels {
             minimum_htlc_in_msat: c.minimum_htlc_in_msat.map(|f| f.into()), // Rule #2 for type msat?
             minimum_htlc_out_msat: c.minimum_htlc_out_msat.map(|f| f.into()), // Rule #2 for type msat?
             maximum_htlc_out_msat: c.maximum_htlc_out_msat.map(|f| f.into()), // Rule #2 for type msat?
+<<<<<<< HEAD
             their_to_self_delay: c.their_to_self_delay, // Rule #2 for type u32?
             our_to_self_delay: c.our_to_self_delay, // Rule #2 for type u32?
             max_accepted_htlcs: c.max_accepted_htlcs, // Rule #2 for type u32?
-            status: c.status.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
+            status: c.status.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             in_payments_offered: c.in_payments_offered, // Rule #2 for type u64?
+=======
+            their_to_self_delay: c.their_to_self_delay.clone(), // Rule #2 for type u32?
+            our_to_self_delay: c.our_to_self_delay.clone(), // Rule #2 for type u32?
+            max_accepted_htlcs: c.max_accepted_htlcs.clone(), // Rule #2 for type u32?
+            status: c.status.as_ref().map(|arr| arr.iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+            in_payments_offered: c.in_payments_offered.clone(), // Rule #2 for type u64?
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
             in_offered_msat: c.in_offered_msat.map(|f| f.into()), // Rule #2 for type msat?
             in_payments_fulfilled: c.in_payments_fulfilled, // Rule #2 for type u64?
             in_fulfilled_msat: c.in_fulfilled_msat.map(|f| f.into()), // Rule #2 for type msat?
@@ -152,8 +179,13 @@ impl From<responses::ListpeersPeersChannels> for pb::ListpeersPeersChannels {
             out_offered_msat: c.out_offered_msat.map(|f| f.into()), // Rule #2 for type msat?
             out_payments_fulfilled: c.out_payments_fulfilled, // Rule #2 for type u64?
             out_fulfilled_msat: c.out_fulfilled_msat.map(|f| f.into()), // Rule #2 for type msat?
-            htlcs: c.htlcs.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
+<<<<<<< HEAD
+            htlcs: c.htlcs.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             close_to_addr: c.close_to_addr, // Rule #2 for type string?
+=======
+            htlcs: c.htlcs.as_ref().map(|arr| arr.iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+            close_to_addr: c.close_to_addr.clone(), // Rule #2 for type string?
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -162,13 +194,23 @@ impl From<responses::ListpeersPeersChannels> for pb::ListpeersPeersChannels {
 impl From<responses::ListpeersPeers> for pb::ListpeersPeers {
     fn from(c: responses::ListpeersPeers) -> Self {
         Self {
+<<<<<<< HEAD
             id: c.id.serialize().to_vec(), // Rule #2 for type pubkey
             connected: c.connected, // Rule #2 for type boolean
-            log: c.log.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
-            channels: c.channels.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListpeersPeersChannels 
-            netaddr: c.netaddr.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
+            log: c.log.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+            channels: c.channels.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListpeersPeersChannels
+            netaddr: c.netaddr.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             remote_addr: c.remote_addr, // Rule #2 for type string?
             features: c.features.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
+=======
+            id: c.id.to_vec(), // Rule #2 for type pubkey
+            connected: c.connected.clone(), // Rule #2 for type boolean
+            log: c.log.as_ref().map(|arr| arr.iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+            channels: c.channels.iter().map(|i| i.into()).collect(), // Rule #3 for type ListpeersPeersChannels
+            netaddr: c.netaddr.as_ref().map(|arr| arr.iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+            remote_addr: c.remote_addr.clone(), // Rule #2 for type string?
+            features: c.features.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type hex?
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -177,7 +219,11 @@ impl From<responses::ListpeersPeers> for pb::ListpeersPeers {
 impl From<responses::ListpeersResponse> for pb::ListpeersResponse {
     fn from(c: responses::ListpeersResponse) -> Self {
         Self {
-            peers: c.peers.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListpeersPeers 
+<<<<<<< HEAD
+            peers: c.peers.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListpeersPeers
+=======
+            peers: c.peers.iter().map(|i| i.into()).collect(), // Rule #3 for type ListpeersPeers
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -219,8 +265,13 @@ impl From<responses::ListfundsChannels> for pb::ListfundsChannels {
 impl From<responses::ListfundsResponse> for pb::ListfundsResponse {
     fn from(c: responses::ListfundsResponse) -> Self {
         Self {
-            outputs: c.outputs.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListfundsOutputs 
-            channels: c.channels.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListfundsChannels 
+<<<<<<< HEAD
+            outputs: c.outputs.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListfundsOutputs
+            channels: c.channels.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListfundsChannels
+=======
+            outputs: c.outputs.iter().map(|i| i.into()).collect(), // Rule #3 for type ListfundsOutputs
+            channels: c.channels.iter().map(|i| i.into()).collect(), // Rule #3 for type ListfundsChannels
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -275,7 +326,11 @@ impl From<responses::ListchannelsChannels> for pb::ListchannelsChannels {
 impl From<responses::ListchannelsResponse> for pb::ListchannelsResponse {
     fn from(c: responses::ListchannelsResponse) -> Self {
         Self {
-            channels: c.channels.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListchannelsChannels 
+<<<<<<< HEAD
+            channels: c.channels.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListchannelsChannels
+=======
+            channels: c.channels.iter().map(|i| i.into()).collect(), // Rule #3 for type ListchannelsChannels
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -357,10 +412,17 @@ impl From<responses::CreateinvoiceResponse> for pb::CreateinvoiceResponse {
 impl From<responses::DatastoreResponse> for pb::DatastoreResponse {
     fn from(c: responses::DatastoreResponse) -> Self {
         Self {
-            key: c.key.into_iter().map(|i| i.into()).collect(), // Rule #3 for type string 
+<<<<<<< HEAD
+            key: c.key.into_iter().map(|i| i.into()).collect(), // Rule #3 for type string
             generation: c.generation, // Rule #2 for type u64?
             hex: c.hex.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
             string: c.string, // Rule #2 for type string?
+=======
+            key: c.key.iter().map(|i| i.into()).collect(), // Rule #3 for type string
+            generation: c.generation.clone(), // Rule #2 for type u64?
+            hex: c.hex.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type hex?
+            string: c.string.clone(), // Rule #2 for type string?
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -370,7 +432,11 @@ impl From<responses::CreateonionResponse> for pb::CreateonionResponse {
     fn from(c: responses::CreateonionResponse) -> Self {
         Self {
             onion: hex::decode(&c.onion).unwrap(), // Rule #2 for type hex
-            shared_secrets: c.shared_secrets.into_iter().map(|i| i.to_vec()).collect(), // Rule #3 for type secret 
+<<<<<<< HEAD
+            shared_secrets: c.shared_secrets.into_iter().map(|i| i.to_vec()).collect(), // Rule #3 for type secret
+=======
+            shared_secrets: c.shared_secrets.iter().map(|i| i.clone().to_vec()).collect(), // Rule #3 for type secret
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -379,10 +445,17 @@ impl From<responses::CreateonionResponse> for pb::CreateonionResponse {
 impl From<responses::DeldatastoreResponse> for pb::DeldatastoreResponse {
     fn from(c: responses::DeldatastoreResponse) -> Self {
         Self {
-            key: c.key.into_iter().map(|i| i.into()).collect(), // Rule #3 for type string 
+<<<<<<< HEAD
+            key: c.key.into_iter().map(|i| i.into()).collect(), // Rule #3 for type string
             generation: c.generation, // Rule #2 for type u64?
             hex: c.hex.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
             string: c.string, // Rule #2 for type string?
+=======
+            key: c.key.iter().map(|i| i.into()).collect(), // Rule #3 for type string
+            generation: c.generation.clone(), // Rule #2 for type u64?
+            hex: c.hex.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type hex?
+            string: c.string.clone(), // Rule #2 for type string?
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -434,10 +507,17 @@ impl From<responses::InvoiceResponse> for pb::InvoiceResponse {
 impl From<responses::ListdatastoreDatastore> for pb::ListdatastoreDatastore {
     fn from(c: responses::ListdatastoreDatastore) -> Self {
         Self {
-            key: c.key.into_iter().map(|i| i.into()).collect(), // Rule #3 for type string 
+<<<<<<< HEAD
+            key: c.key.into_iter().map(|i| i.into()).collect(), // Rule #3 for type string
             generation: c.generation, // Rule #2 for type u64?
             hex: c.hex.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
             string: c.string, // Rule #2 for type string?
+=======
+            key: c.key.iter().map(|i| i.into()).collect(), // Rule #3 for type string
+            generation: c.generation.clone(), // Rule #2 for type u64?
+            hex: c.hex.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type hex?
+            string: c.string.clone(), // Rule #2 for type string?
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -446,7 +526,11 @@ impl From<responses::ListdatastoreDatastore> for pb::ListdatastoreDatastore {
 impl From<responses::ListdatastoreResponse> for pb::ListdatastoreResponse {
     fn from(c: responses::ListdatastoreResponse) -> Self {
         Self {
-            datastore: c.datastore.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListdatastoreDatastore 
+<<<<<<< HEAD
+            datastore: c.datastore.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListdatastoreDatastore
+=======
+            datastore: c.datastore.iter().map(|i| i.into()).collect(), // Rule #3 for type ListdatastoreDatastore
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -477,7 +561,11 @@ impl From<responses::ListinvoicesInvoices> for pb::ListinvoicesInvoices {
 impl From<responses::ListinvoicesResponse> for pb::ListinvoicesResponse {
     fn from(c: responses::ListinvoicesResponse) -> Self {
         Self {
-            invoices: c.invoices.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListinvoicesInvoices 
+<<<<<<< HEAD
+            invoices: c.invoices.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListinvoicesInvoices
+=======
+            invoices: c.invoices.iter().map(|i| i.into()).collect(), // Rule #3 for type ListinvoicesInvoices
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -529,7 +617,11 @@ impl From<responses::ListsendpaysPayments> for pb::ListsendpaysPayments {
 impl From<responses::ListsendpaysResponse> for pb::ListsendpaysResponse {
     fn from(c: responses::ListsendpaysResponse) -> Self {
         Self {
-            payments: c.payments.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListsendpaysPayments 
+<<<<<<< HEAD
+            payments: c.payments.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListsendpaysPayments
+=======
+            payments: c.payments.iter().map(|i| i.into()).collect(), // Rule #3 for type ListsendpaysPayments
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -566,13 +658,23 @@ impl From<responses::ListtransactionsTransactions> for pb::ListtransactionsTrans
         Self {
             hash: hex::decode(&c.hash).unwrap(), // Rule #2 for type txid
             rawtx: hex::decode(&c.rawtx).unwrap(), // Rule #2 for type hex
+<<<<<<< HEAD
             blockheight: c.blockheight, // Rule #2 for type u32
             txindex: c.txindex, // Rule #2 for type u32
             channel: c.channel.map(|v| v.to_string()), // Rule #2 for type short_channel_id?
             locktime: c.locktime, // Rule #2 for type u32
             version: c.version, // Rule #2 for type u32
-            inputs: c.inputs.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListtransactionsTransactionsInputs 
-            outputs: c.outputs.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListtransactionsTransactionsOutputs 
+            inputs: c.inputs.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListtransactionsTransactionsInputs
+            outputs: c.outputs.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListtransactionsTransactionsOutputs
+=======
+            blockheight: c.blockheight.clone(), // Rule #2 for type u32
+            txindex: c.txindex.clone(), // Rule #2 for type u32
+            channel: c.channel.as_ref().map(|v| v.to_string()), // Rule #2 for type short_channel_id?
+            locktime: c.locktime.clone(), // Rule #2 for type u32
+            version: c.version.clone(), // Rule #2 for type u32
+            inputs: c.inputs.iter().map(|i| i.into()).collect(), // Rule #3 for type ListtransactionsTransactionsInputs
+            outputs: c.outputs.iter().map(|i| i.into()).collect(), // Rule #3 for type ListtransactionsTransactionsOutputs
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -581,7 +683,11 @@ impl From<responses::ListtransactionsTransactions> for pb::ListtransactionsTrans
 impl From<responses::ListtransactionsResponse> for pb::ListtransactionsResponse {
     fn from(c: responses::ListtransactionsResponse) -> Self {
         Self {
-            transactions: c.transactions.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListtransactionsTransactions 
+<<<<<<< HEAD
+            transactions: c.transactions.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListtransactionsTransactions
+=======
+            transactions: c.transactions.iter().map(|i| i.into()).collect(), // Rule #3 for type ListtransactionsTransactions
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -618,12 +724,21 @@ impl From<responses::ListnodesNodesAddresses> for pb::ListnodesNodesAddresses {
 impl From<responses::ListnodesNodes> for pb::ListnodesNodes {
     fn from(c: responses::ListnodesNodes) -> Self {
         Self {
+<<<<<<< HEAD
             nodeid: c.nodeid.serialize().to_vec(), // Rule #2 for type pubkey
             last_timestamp: c.last_timestamp, // Rule #2 for type u32?
             alias: c.alias, // Rule #2 for type string?
             color: c.color.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
             features: c.features.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
-            addresses: c.addresses.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
+            addresses: c.addresses.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+=======
+            nodeid: c.nodeid.to_vec(), // Rule #2 for type pubkey
+            last_timestamp: c.last_timestamp.clone(), // Rule #2 for type u32?
+            alias: c.alias.clone(), // Rule #2 for type string?
+            color: c.color.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type hex?
+            features: c.features.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type hex?
+            addresses: c.addresses.as_ref().map(|arr| arr.iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -632,7 +747,11 @@ impl From<responses::ListnodesNodes> for pb::ListnodesNodes {
 impl From<responses::ListnodesResponse> for pb::ListnodesResponse {
     fn from(c: responses::ListnodesResponse) -> Self {
         Self {
-            nodes: c.nodes.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListnodesNodes 
+<<<<<<< HEAD
+            nodes: c.nodes.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListnodesNodes
+=======
+            nodes: c.nodes.iter().map(|i| i.into()).collect(), // Rule #3 for type ListnodesNodes
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -758,8 +877,13 @@ impl From<responses::FundpsbtResponse> for pb::FundpsbtResponse {
             feerate_per_kw: c.feerate_per_kw, // Rule #2 for type u32
             estimated_final_weight: c.estimated_final_weight, // Rule #2 for type u32
             excess_msat: Some(c.excess_msat.into()), // Rule #2 for type msat
+<<<<<<< HEAD
             change_outnum: c.change_outnum, // Rule #2 for type u32?
-            reservations: c.reservations.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
+            reservations: c.reservations.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+=======
+            change_outnum: c.change_outnum.clone(), // Rule #2 for type u32?
+            reservations: c.reservations.as_ref().map(|arr| arr.iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -804,8 +928,13 @@ impl From<responses::UtxopsbtResponse> for pb::UtxopsbtResponse {
             feerate_per_kw: c.feerate_per_kw, // Rule #2 for type u32
             estimated_final_weight: c.estimated_final_weight, // Rule #2 for type u32
             excess_msat: Some(c.excess_msat.into()), // Rule #2 for type msat
+<<<<<<< HEAD
             change_outnum: c.change_outnum, // Rule #2 for type u32?
-            reservations: c.reservations.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3 
+            reservations: c.reservations.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+=======
+            change_outnum: c.change_outnum.clone(), // Rule #2 for type u32?
+            reservations: c.reservations.as_ref().map(|arr| arr.iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -892,7 +1021,11 @@ impl From<responses::GetrouteRoute> for pb::GetrouteRoute {
 impl From<responses::GetrouteResponse> for pb::GetrouteResponse {
     fn from(c: responses::GetrouteResponse) -> Self {
         Self {
-            route: c.route.into_iter().map(|i| i.into()).collect(), // Rule #3 for type GetrouteRoute 
+<<<<<<< HEAD
+            route: c.route.into_iter().map(|i| i.into()).collect(), // Rule #3 for type GetrouteRoute
+=======
+            route: c.route.iter().map(|i| i.into()).collect(), // Rule #3 for type GetrouteRoute
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -919,7 +1052,11 @@ impl From<responses::ListforwardsForwards> for pb::ListforwardsForwards {
 impl From<responses::ListforwardsResponse> for pb::ListforwardsResponse {
     fn from(c: responses::ListforwardsResponse) -> Self {
         Self {
-            forwards: c.forwards.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListforwardsForwards 
+<<<<<<< HEAD
+            forwards: c.forwards.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListforwardsForwards
+=======
+            forwards: c.forwards.iter().map(|i| i.into()).collect(), // Rule #3 for type ListforwardsForwards
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -948,7 +1085,11 @@ impl From<responses::ListpaysPays> for pb::ListpaysPays {
 impl From<responses::ListpaysResponse> for pb::ListpaysResponse {
     fn from(c: responses::ListpaysResponse) -> Self {
         Self {
-            pays: c.pays.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListpaysPays 
+<<<<<<< HEAD
+            pays: c.pays.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListpaysPays
+=======
+            pays: c.pays.iter().map(|i| i.into()).collect(), // Rule #3 for type ListpaysPays
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
@@ -983,7 +1124,7 @@ impl From<responses::SetchannelChannels> for pb::SetchannelChannels {
 impl From<responses::SetchannelResponse> for pb::SetchannelResponse {
     fn from(c: responses::SetchannelResponse) -> Self {
         Self {
-            channels: c.channels.into_iter().map(|i| i.into()).collect(), // Rule #3 for type SetchannelChannels 
+            channels: c.channels.into_iter().map(|i| i.into()).collect(), // Rule #3 for type SetchannelChannels
         }
     }
 }
@@ -1523,8 +1664,14 @@ impl From<pb::ListforwardsRequest> for requests::ListforwardsRequest {
     fn from(c: pb::ListforwardsRequest) -> Self {
         Self {
             status: c.status.map(|v| v.try_into().unwrap()),
+<<<<<<< HEAD
             in_channel: c.in_channel.map(|v| cln_rpc::primitives::ShortChannelId::from_str(&v).unwrap()), // Rule #1 for type short_channel_id?
             out_channel: c.out_channel.map(|v| cln_rpc::primitives::ShortChannelId::from_str(&v).unwrap()), // Rule #1 for type short_channel_id?
+=======
+            in_channel: c.in_channel.as_ref().map(|v| cln_rpc::primitives::ShortChannelId::from_str(&v).unwrap()), // Rule #1 for type short_channel_id?
+            out_channel: c.out_channel.as_ref().map(|v| cln_rpc::primitives::ShortChannelId::from_str(&v).unwrap()), // Rule #1 for type short_channel_id?
+            timelimit: c.timelimit.clone(),
+>>>>>>> ef0fc3d1f (add timelimit for getforward command)
         }
     }
 }
