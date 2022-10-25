@@ -1370,7 +1370,8 @@ const struct forwarding *wallet_forwarded_payments_get(struct wallet *w,
 						       const tal_t *ctx,
 						       enum forward_status state,
 						       const struct short_channel_id *chan_in,
-						       const struct short_channel_id *chan_out);
+						       const struct short_channel_id *chan_out,
+						       const timeabs *epoch);
 
 /**
  * Load remote_ann_node_sig and remote_ann_bitcoin_sig
