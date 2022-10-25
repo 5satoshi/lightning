@@ -4567,7 +4567,7 @@ const struct forwarding *wallet_forwarded_payments_get(struct wallet *w,
 		db_bind_int(stmt, 5, any);
 	}
 
-	if (timestamp) {
+	if (timestamp_str) {
 		// specific out_channel
 		db_bind_int(stmt, 6, 0);
 		db_bind_text(stmt, 7, timestamp_str);
