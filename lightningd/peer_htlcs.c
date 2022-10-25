@@ -2824,7 +2824,7 @@ static void listforwardings_add_forwardings(struct json_stream *response,
 					    enum forward_status status,
 					    const struct short_channel_id *chan_in,
 					    const struct short_channel_id *chan_out,
-					    const u32 *timestamp)
+					    const u64 *timestamp)
 {
 	const struct forwarding *forwardings;
 
@@ -2851,7 +2851,7 @@ static struct command_result *json_listforwards(struct command *cmd,
 	struct short_channel_id *chan_in;
 	struct short_channel_id *chan_out;
 
-	u32 *timestamp;
+	u64 *timestamp;
 
 	const char *status_str;
 	enum forward_status status = FORWARD_ANY;

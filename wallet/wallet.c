@@ -4508,7 +4508,7 @@ const struct forwarding *wallet_forwarded_payments_get(struct wallet *w,
 						       enum forward_status status,
 						       const struct short_channel_id *chan_in,
 						       const struct short_channel_id *chan_out,
-						       const u32 *timestamp)
+						       const u64 *timestamp)
 {
 	struct forwarding *results = tal_arr(ctx, struct forwarding, 0);
 	size_t count = 0;
@@ -4570,7 +4570,7 @@ const struct forwarding *wallet_forwarded_payments_get(struct wallet *w,
 	if (timestamp) {
 		// specific out_channel
 		db_bind_int(stmt, 6, 0);
-		db_bind_int(stmt, 7, timestamp->int);
+		db_bind_u64(stmt, 7, timestamp);
 	} else {
 		// any out_channel
 		db_bind_int(stmt, 6, 1);
