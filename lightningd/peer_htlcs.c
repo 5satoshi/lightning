@@ -2823,11 +2823,12 @@ static void listforwardings_add_forwardings(struct json_stream *response,
 					    struct wallet *wallet,
 					    enum forward_status status,
 					    const struct short_channel_id *chan_in,
-					    const struct short_channel_id *chan_out)
+					    const struct short_channel_id *chan_out,
+					    const u32 *timestamp)
 {
 	const struct forwarding *forwardings;
 
-	forwardings = wallet_forwarded_payments_get(wallet, tmpctx, status, chan_in, chan_out);
+	forwardings = wallet_forwarded_payments_get(wallet, tmpctx, status, chan_in, chan_out, timestamp);
 
 	json_array_start(response, "forwards");
 	for (size_t i=0; i<tal_count(forwardings); i++) {
@@ -2849,6 +2850,8 @@ static struct command_result *json_listforwards(struct command *cmd,
 
 	struct short_channel_id *chan_in;
 	struct short_channel_id *chan_out;
+
+	u32 *timestamp;
 
 	const char *status_str;
 	enum forward_status status = FORWARD_ANY;
@@ -2874,6 +2877,7 @@ static struct command_result *json_listforwards(struct command *cmd,
 		   p_opt("status", param_string, &status_str),
 		   p_opt("in_channel", param_short_channel_id, &chan_in),
 		   p_opt("out_channel", param_short_channel_id, &chan_out),
+		   p_opt("timelimit", param_number, &timestamp),
 		   NULL))
 		return command_param_failed();
  parsed:
@@ -2881,7 +2885,7 @@ static struct command_result *json_listforwards(struct command *cmd,
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS, "Unrecognized status: %s", status_str);
 
 	response = json_stream_success(cmd);
-	listforwardings_add_forwardings(response, cmd->ld->wallet, status, chan_in, chan_out);
+	listforwardings_add_forwardings(response, cmd->ld->wallet, status, chan_in, chan_out,timestamp);
 
 	return command_success(cmd, response);
 }
