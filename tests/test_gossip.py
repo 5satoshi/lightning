@@ -2175,7 +2175,7 @@ def test_parms_listforwards(node_factory):
     l2.start()
 
     forwards_new = l1.rpc.listforwards("settled")["forwards"]
-    forwards_dep = l2.rpc.call("listforwards", {"in_channel": "0x1x2", "out_channel": "0x2x3", "status": "settled"})["forwards"]
+    forwards_dep = l2.rpc.call("listforwards", {"in_channel": "0x1x2", "out_channel": "0x2x3", "status": "settled", "timelimit": "1621265276793649356"})["forwards"]
 
     assert len(forwards_new) == 0
     assert len(forwards_dep) == 0

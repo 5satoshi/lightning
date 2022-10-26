@@ -2434,6 +2434,10 @@ def test_listforwards(node_factory, bitcoind):
     c24_forwards = l2.rpc.listforwards(out_channel=c24)['forwards']
     assert len(c24_forwards) == 1
 
+    # timelimit='1621265276793649356'
+    timelimit_forwards = l2.rpc.listforwards(out_channel='1621265276793649356')['forwards']
+    assert len(timelimit_forwards) == 1
+
 
 @pytest.mark.openchannel('v1')
 def test_version_reexec(node_factory, bitcoind):

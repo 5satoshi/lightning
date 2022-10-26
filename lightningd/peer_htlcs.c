@@ -2824,11 +2824,11 @@ static void listforwardings_add_forwardings(struct json_stream *response,
 					    enum forward_status status,
 					    const struct short_channel_id *chan_in,
 					    const struct short_channel_id *chan_out,
-					    const char *timestamp)
+					    const char *timestamp_str)
 {
 	const struct forwarding *forwardings;
 
-	forwardings = wallet_forwarded_payments_get(wallet, tmpctx, status, chan_in, chan_out, timestamp);
+	forwardings = wallet_forwarded_payments_get(wallet, tmpctx, status, chan_in, chan_out, timestamp_str);
 
 	json_array_start(response, "forwards");
 	for (size_t i=0; i<tal_count(forwardings); i++) {
@@ -2894,6 +2894,6 @@ static const struct json_command listforwards_command = {
 	"listforwards",
 	"channels",
 	json_listforwards,
-	"List all forwarded payments and their information optionally filtering by [in_channel] [out_channel] and [state]"
+	"List all forwarded payments and their information optionally filtering by [in_channel] [out_channel] [timelimit] and [state]"
 };
 AUTODATA(json_command, &listforwards_command);
