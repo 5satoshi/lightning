@@ -4533,7 +4533,8 @@ const struct forwarding *wallet_forwarded_payments_get(struct wallet *w,
 		"LEFT JOIN channel_htlcs hin ON (f.in_htlc_id = hin.id) "
 		"WHERE (1 = ? OR f.state = ?) AND "
 		"(1 = ? OR f.in_channel_scid = ?) AND "
-		"(1 = ? OR f.out_channel_scid = ?)"));
+		"(1 = ? OR f.out_channel_scid = ?) "
+		"ORDER BY f.received_time desc limit 100000"));
 
 	if (status == FORWARD_ANY) {
 		// any status
